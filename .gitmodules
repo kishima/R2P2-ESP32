@@ -7,3 +7,6 @@
 [submodule "components/m5gfx"]
 	path = components/m5gfx
 	url = https://github.com/m5stack/M5GFX.git
+[submodule "components/picoruby-esp32"]
+	path = components/picoruby-esp32
+	url = git@github.com:kishima/picoruby-esp32.git
