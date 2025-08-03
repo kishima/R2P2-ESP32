@@ -18,9 +18,14 @@ RUN existing_user=$(getent passwd $USER_ID | cut -d: -f1) && \
     echo $USER_NAME:$USER_NAME | chpasswd && \
     echo "$USER_NAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-RUN apt-get update && apt-get install -y ruby
+RUN apt-get update && apt-get install -y ruby \
+    ruby-bundler \
+    ruby-dev \
+    build-essential
 
 USER $USER_NAME
+RUN bundle config set --global path 'vendor/bundle'
+RUN echo 'source /opt/esp/idf/export.sh' >> ~/.bashrc
 
 WORKDIR /project
 ENTRYPOINT ["/opt/esp/entrypoint.sh"]
