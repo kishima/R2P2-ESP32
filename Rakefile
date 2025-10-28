@@ -7,6 +7,21 @@ require "mruby/core_ext"
 require "mruby/build"
 require "picoruby/build"
 
+# add for Docker
+UID  = `id -u`.strip
+GID  = `id -g`.strip
+PWD_ = Dir.pwd
+IMAGE       = ENV.fetch("ESP_IDF_IMAGE", "esp32_build_container:v5.5.1")
+DEVICE_ARGS = ENV["DEVICE_ARGS"].to_s
+
+DOCKER_CMD = [
+  "docker run --rm",
+  "--user #{UID}:#{GID}",
+  "-v #{PWD_}:/project",
+  IMAGE
+].join(" ")
+
+
 # load configuration file
 MRUBY_CONFIG = MRuby::Build.mruby_config_path
 load MRUBY_CONFIG
@@ -28,13 +43,15 @@ end
 %w[esp32 esp32c3 esp32c6 esp32s3].each do |name|
   desc "Setup environment for #{name} target"
   task "setup_#{name}" => %w[deep_clean setup] do
-    sh "idf.py set-target #{name}"
+    #sh "idf.py set-target #{name}"
+    sh "#{DOCKER_CMD} idf.py set-target #{name}"
   end
 end
 
 desc "Build the ESP32 project"
 task :build do
-  sh "idf.py build"
+  sh "#{DOCKER_CMD} idf.py build"
+  #sh "idf.py build"
 end
 
 desc "Flash the built firmware to ESP32"
@@ -56,21 +73,22 @@ end
 
 desc "Monitor ESP32 serial output"
 task :monitor do
-  sh "idf.py monitor"
+  sh "#{DOCKER_CMD} idf.py monitor"
 end
 
 desc "Clean build artifacts"
 task :clean do
-  sh "idf.py clean"
-  FileUtils.cd MRUBY_ROOT do
-    %w[xtensa-esp riscv-esp].each do |mruby_config|
-      sh "MRUBY_CONFIG=#{mruby_config} rake clean"
-    end
-  end
+  sh "#{DOCKER_CMD} idf.py clean"
+  sh "rm -rf components/picoruby-esp32/picoruby/build/*"
+  # FileUtils.cd MRUBY_ROOT do
+  #   %w[xtensa-esp riscv-esp].each do |mruby_config|
+  #     sh "MRUBY_CONFIG=#{mruby_config} rake clean"
+  #   end
+  # end
 end
 
 desc "Perform deep clean including ESP32 build repos"
 task :deep_clean => %w[clean] do
-  sh "idf.py fullclean"
+  sh "#{DOCKER_CMD} idf.py fullclean"
   rm_rf File.join(MRUBY_ROOT, "build/repos/esp32")
 end
