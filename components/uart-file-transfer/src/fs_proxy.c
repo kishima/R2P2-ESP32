@@ -3,16 +3,36 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <unistd.h>
 
-// Family mruby modules
+// ESP32 standard logging
+#include "esp_log.h"
+
+// FreeRTOS
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+
+// UART driver
+#include "driver/uart.h"
+
+// UART file transfer module
 #include "uart_file_transfer.h"
 
-#include "fmrb_hal.h"
-#include "fmrb_pin_assign.h"
-#include "fmrb_app.h"
-#include "fmrb_task_config.h"
-
 static const char *TAG = "fs_proxy";
+
+// UART Configuration
+#define FS_PROXY_UART_NUM UART_NUM_0
+#define FS_PROXY_UART_TX_PIN 1
+#define FS_PROXY_UART_RX_PIN 3
+#define FS_PROXY_UART_BAUD_RATE 115200
+#define FS_PROXY_UART_BUF_SIZE 2048
+
+// Task Configuration
+#define FS_PROXY_TASK_STACK_SIZE 4096
+#define FS_PROXY_TASK_PRIORITY 5
 
 // Protocol definitions
 #define FS_PROXY_DELIM 0x00
@@ -28,7 +48,7 @@ static const char *TAG = "fs_proxy";
 #define CMD_PUT 0x22
 #define RESP_CODE 0x00
 
-static fmrb_task_handle_t task_handle;
+static TaskHandle_t task_handle = NULL;
 
 // CRC32 lookup table (standard polynomial 0xEDB88320)
 static const uint32_t crc32_table[256] = {
@@ -71,8 +91,8 @@ typedef struct {
     uint8_t rx_buffer[FS_PROXY_MAX_FRAME_SIZE];
     size_t rx_len;
     char current_dir[FS_PROXY_MAX_PATH_LEN];
-    fmrb_semaphore_t mutex;
-    fmrb_uart_handle_t uart;
+    SemaphoreHandle_t mutex;
+    uart_port_t uart_num;
 } fs_proxy_context_t;
 
 // Calculate CRC32 checksum
@@ -204,13 +224,12 @@ static void cmd_cd(fs_proxy_context_t *ctx, const char *json_params, char *respo
     }
 
     // Try to open directory to verify it exists
-    fmrb_dir_t dir;
-    fmrb_err_t err = fmrb_hal_file_opendir(path, &dir);
-    if (err != FMRB_OK) {
+    DIR *dir = opendir(path);
+    if (dir == NULL) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Directory not found\"}");
         return;
     }
-    fmrb_hal_file_closedir(dir);
+    closedir(dir);
 
     // Update current directory
     strncpy(ctx->current_dir, path, sizeof(ctx->current_dir) - 1);
@@ -229,9 +248,8 @@ static void cmd_ls(fs_proxy_context_t *ctx, const char *json_params, char *respo
         strncpy(path, ctx->current_dir, sizeof(path));
     }
 
-    fmrb_dir_t dir;
-    fmrb_err_t err = fmrb_hal_file_opendir(path, &dir);
-    if (err != FMRB_OK) {
+    DIR *dir = opendir(path);
+    if (dir == NULL) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Cannot open directory\"}");
         return;
     }
@@ -240,24 +258,37 @@ static void cmd_ls(fs_proxy_context_t *ctx, const char *json_params, char *respo
     int pos = snprintf(response, response_size, "{\"ok\":true,\"entries\":[");
     bool first = true;
 
-    fmrb_file_info_t info;
-    while (fmrb_hal_file_readdir(dir, &info) == FMRB_OK) {
-        if (info.name[0] == '\0') break;
-
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
         if (!first) {
             pos += snprintf(response + pos, response_size - pos, ",");
         }
         first = false;
 
-        const char *type = (info.is_dir) ? "d" : "f";
+        // Get file stats to determine type and size
+        char fullpath[FS_PROXY_MAX_PATH_LEN];
+        int len = snprintf(fullpath, sizeof(fullpath), "%s/%s", path, entry->d_name);
+        if (len >= sizeof(fullpath)) {
+            // Path too long, skip this entry
+            continue;
+        }
+
+        struct stat st;
+        const char *type = "f";
+        unsigned long size = 0;
+        if (stat(fullpath, &st) == 0) {
+            type = S_ISDIR(st.st_mode) ? "d" : "f";
+            size = st.st_size;
+        }
+
         pos += snprintf(response + pos, response_size - pos,
                        "{\"n\":\"%s\",\"t\":\"%s\",\"s\":%lu}",
-                       info.name, type, (unsigned long)info.size);
+                       entry->d_name, type, size);
 
         if (pos >= response_size - 100) break; // Safety margin
     }
 
-    fmrb_hal_file_closedir(dir);
+    closedir(dir);
     snprintf(response + pos, response_size - pos, "]}");
 }
 
@@ -272,21 +303,21 @@ static void cmd_rm(fs_proxy_context_t *ctx, const char *json_params, char *respo
     }
 
     // Try to get file info to determine if it's a file or directory
-    fmrb_file_info_t info;
-    fmrb_err_t err = fmrb_hal_file_stat(path, &info);
-    if (err != FMRB_OK) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"File not found\"}");
         return;
     }
 
     // Remove file or directory
-    if (info.is_dir) {
-        err = fmrb_hal_file_rmdir(path);
+    int result;
+    if (S_ISDIR(st.st_mode)) {
+        result = rmdir(path);
     } else {
-        err = fmrb_hal_file_remove(path);
+        result = unlink(path);
     }
 
-    if (err != FMRB_OK) {
+    if (result != 0) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Failed to remove\"}");
         return;
     }
@@ -313,9 +344,8 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
     // Get offset (optional, defaults to 0)
     json_get_int(json_params, "off", &offset);
 
-    fmrb_file_t file;
-    fmrb_err_t err = fmrb_hal_file_open(path, FMRB_O_RDONLY, &file);
-    if (err != FMRB_OK) {
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Cannot open file\"}");
         *binary_size = 0;
         return;
@@ -323,9 +353,8 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
 
     // Seek to offset
     if (offset > 0) {
-        err = fmrb_hal_file_seek(file, offset, FMRB_SEEK_SET);
-        if (err != FMRB_OK) {
-            fmrb_hal_file_close(file);
+        if (fseek(file, offset, SEEK_SET) != 0) {
+            fclose(file);
             snprintf(response, response_size, "{\"ok\":false,\"err\":\"Seek failed\"}");
             *binary_size = 0;
             return;
@@ -333,23 +362,16 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
     }
 
     // Read chunk
-    size_t bytes_read = 0;
-    err = fmrb_hal_file_read(file, binary_data, binary_max, &bytes_read);
-    fmrb_hal_file_close(file);
-
-    if (err != FMRB_OK && bytes_read == 0) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Read failed\"}");
-        *binary_size = 0;
-        return;
-    }
+    size_t bytes_read = fread(binary_data, 1, binary_max, file);
+    fclose(file);
 
     *binary_size = bytes_read;
     bool eof = (bytes_read == 0 || bytes_read < binary_max);
     snprintf(response, response_size, "{\"ok\":true,\"eof\":%s,\"bin\":%zu}",
              eof ? "true" : "false", bytes_read);
 
-    FMRB_LOGD(TAG, "GET - path=%s, offset=%d, bytes_read=%zu, eof=%s",
-              path, offset, bytes_read, eof ? "true" : "false");
+    ESP_LOGD(TAG, "GET - path=%s, offset=%d, bytes_read=%zu, eof=%s",
+             path, offset, bytes_read, eof ? "true" : "false");
 }
 
 // Command handler: PUT (write file contents)
@@ -370,37 +392,34 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
     // Get offset (optional, defaults to 0)
     json_get_int(json_params, "off", &offset);
 
-    fmrb_file_t file;
-    fmrb_err_t err;
+    FILE *file;
 
     // If offset is 0, create/truncate the file. Otherwise, open for append/update
     if (offset == 0) {
-        err = fmrb_hal_file_open(path, FMRB_O_WRONLY | FMRB_O_CREAT | FMRB_O_TRUNC, &file);
+        file = fopen(path, "wb");
     } else {
-        err = fmrb_hal_file_open(path, FMRB_O_WRONLY, &file);
+        file = fopen(path, "r+b");
     }
 
-    if (err != FMRB_OK) {
+    if (file == NULL) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Cannot open file\"}");
         return;
     }
 
     // Seek to offset if needed
     if (offset > 0) {
-        err = fmrb_hal_file_seek(file, offset, FMRB_SEEK_SET);
-        if (err != FMRB_OK) {
-            fmrb_hal_file_close(file);
+        if (fseek(file, offset, SEEK_SET) != 0) {
+            fclose(file);
             snprintf(response, response_size, "{\"ok\":false,\"err\":\"Seek failed\"}");
             return;
         }
     }
 
     // Write chunk
-    size_t bytes_written = 0;
-    err = fmrb_hal_file_write(file, binary_data, binary_size, &bytes_written);
-    fmrb_hal_file_close(file);
+    size_t bytes_written = fwrite(binary_data, 1, binary_size, file);
+    fclose(file);
 
-    if (err != FMRB_OK || bytes_written != binary_size) {
+    if (bytes_written != binary_size) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Write failed\"}");
         return;
     }
@@ -409,7 +428,7 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
 }
 
 // Send response frame (encode and send via UART)
-static void send_response(fmrb_uart_handle_t uart, const char *json_response, const uint8_t *binary_data, size_t binary_size)
+static void send_response(uart_port_t uart_num, const char *json_response, const uint8_t *binary_data, size_t binary_size)
 {
     uint8_t packet[FS_PROXY_MAX_FRAME_SIZE];
     uint8_t encoded[FS_PROXY_MAX_FRAME_SIZE];
@@ -432,8 +451,8 @@ static void send_response(fmrb_uart_handle_t uart, const char *json_response, co
     }
 
     // Debug: print response details
-    FMRB_LOGD(TAG, "Sending response - JSON: %s, JSON len: %zu, Binary size: %zu",
-              json_response, json_len, binary_size);
+    ESP_LOGD(TAG, "Sending response - JSON: %s, JSON len: %zu, Binary size: %zu",
+             json_response, json_len, binary_size);
 
     // Append CRC32 (big-endian)
     uint32_t crc = crc32_calc(packet, pos);
@@ -449,9 +468,9 @@ static void send_response(fmrb_uart_handle_t uart, const char *json_response, co
     }
 
     // Send frame with delimiter
-    fmrb_hal_uart_write(uart, encoded, encoded_len, NULL);
+    uart_write_bytes(uart_num, encoded, encoded_len);
     uint8_t delim = FS_PROXY_DELIM;
-    fmrb_hal_uart_write(uart, &delim, 1, NULL);
+    uart_write_bytes(uart_num, &delim, 1);
 }
 
 // Process received frame
@@ -464,7 +483,7 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
     // COBS decode
     size_t decoded_len = cobs_decode(frame, frame_len, decoded, sizeof(decoded));
     if (decoded_len < 7) { // Minimum: cmd(1) + len(2) + crc32(4)
-        send_response(ctx->uart, "{\"ok\":false,\"err\":\"Frame too short\"}", NULL, 0);
+        send_response(ctx->uart_num, "{\"ok\":false,\"err\":\"Frame too short\"}", NULL, 0);
         return;
     }
 
@@ -476,7 +495,7 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
 
     uint32_t calculated_crc = crc32_calc(decoded, decoded_len - 4);
     if (received_crc != calculated_crc) {
-        send_response(ctx->uart, "{\"ok\":false,\"err\":\"CRC mismatch\"}", NULL, 0);
+        send_response(ctx->uart_num, "{\"ok\":false,\"err\":\"CRC mismatch\"}", NULL, 0);
         return;
     }
 
@@ -485,7 +504,7 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
     uint16_t json_len = ((uint16_t)decoded[1] << 8) | decoded[2];
 
     if (3 + json_len + 4 > decoded_len) {
-        send_response(ctx->uart, "{\"ok\":false,\"err\":\"Invalid length\"}", NULL, 0);
+        send_response(ctx->uart_num, "{\"ok\":false,\"err\":\"Invalid length\"}", NULL, 0);
         return;
     }
 
@@ -498,12 +517,12 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
     const uint8_t *binary_data = decoded + 3 + json_len;
     size_t binary_size = decoded_len - 4 - 3 - json_len;
 
-    FMRB_LOGD(TAG, "CMD=0x%02x, JSON len=%u, Binary size=%zu, decoded_len=%zu",
-              cmd, json_len, binary_size, decoded_len);
-    FMRB_LOGD(TAG, "JSON params: %s", json_params);
+    ESP_LOGD(TAG, "CMD=0x%02x, JSON len=%u, Binary size=%zu, decoded_len=%zu",
+             cmd, json_len, binary_size, decoded_len);
+    ESP_LOGD(TAG, "JSON params: %s", json_params);
 
     // Take mutex for command execution
-    fmrb_semaphore_take(ctx->mutex, FMRB_TICK_MAX);
+    xSemaphoreTake(ctx->mutex, portMAX_DELAY);
 
     // Dispatch command
     size_t response_binary_size = 0;
@@ -511,38 +530,38 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
     switch (cmd) {
         case CMD_CD:
             cmd_cd(ctx, json_params, json_response, sizeof(json_response));
-            send_response(ctx->uart, json_response, NULL, 0);
+            send_response(ctx->uart_num, json_response, NULL, 0);
             break;
 
         case CMD_LS:
             cmd_ls(ctx, json_params, json_response, sizeof(json_response));
-            send_response(ctx->uart, json_response, NULL, 0);
+            send_response(ctx->uart_num, json_response, NULL, 0);
             break;
 
         case CMD_RM:
             cmd_rm(ctx, json_params, json_response, sizeof(json_response));
-            send_response(ctx->uart, json_response, NULL, 0);
+            send_response(ctx->uart_num, json_response, NULL, 0);
             break;
 
         case CMD_GET:
             cmd_get(ctx, json_params, json_response, sizeof(json_response),
                    binary_buffer, &response_binary_size, sizeof(binary_buffer));
-            send_response(ctx->uart, json_response, binary_buffer, response_binary_size);
+            send_response(ctx->uart_num, json_response, binary_buffer, response_binary_size);
             break;
 
         case CMD_PUT:
             cmd_put(ctx, json_params, binary_data, binary_size,
                    json_response, sizeof(json_response));
-            send_response(ctx->uart, json_response, NULL, 0);
+            send_response(ctx->uart_num, json_response, NULL, 0);
             break;
 
         default:
             snprintf(json_response, sizeof(json_response), "{\"error\":\"Unknown command\"}");
-            send_response(ctx->uart, json_response, NULL, 0);
+            send_response(ctx->uart_num, json_response, NULL, 0);
             break;
     }
 
-    fmrb_semaphore_give(ctx->mutex);
+    xSemaphoreGive(ctx->mutex);
 }
 
 // Main task function
@@ -553,28 +572,27 @@ static void fs_proxy_task(void *arg)
     // Initialize current directory
     strncpy(ctx->current_dir, "/", sizeof(ctx->current_dir));
 
-    FMRB_LOGI(TAG, "Entering main loop (priority=%d)", FMRB_FSPROXY_TASK_PRIORITY);
+    ESP_LOGI(TAG, "Entering main loop (priority=%d)", FS_PROXY_TASK_PRIORITY);
 
     // Main loop: read from UART and process frames
     while (1) {
         uint8_t byte;
-        fmrb_err_t err = fmrb_hal_uart_read_byte(ctx->uart, &byte);
+        int len = uart_read_bytes(ctx->uart_num, &byte, 1, pdMS_TO_TICKS(100));
 
-        if (err == FMRB_ERR_TIMEOUT) {
-            // No data available, yield
-            fmrb_task_delay(FMRB_MS_TO_TICKS(100));
+        if (len == 0) {
+            // No data available, continue
             continue;
-        } else if (err != FMRB_OK) {
+        } else if (len < 0) {
             // Error reading, delay and retry
-            FMRB_LOGW(TAG, "UART read error %d", err);
-            fmrb_task_delay(FMRB_MS_TO_TICKS(100));
+            ESP_LOGW(TAG, "UART read error");
+            vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
 
         if (byte == FS_PROXY_DELIM) {
             // Frame complete
             if (ctx->rx_len > 0) {
-                FMRB_LOGD(TAG, "Frame received (%zu bytes)", ctx->rx_len);
+                ESP_LOGD(TAG, "Frame received (%zu bytes)", ctx->rx_len);
                 process_frame(ctx, ctx->rx_buffer, ctx->rx_len);
                 ctx->rx_len = 0;
             }
@@ -584,7 +602,7 @@ static void fs_proxy_task(void *arg)
                 ctx->rx_buffer[ctx->rx_len++] = byte;
             } else {
                 // Buffer overflow, reset
-                FMRB_LOGW(TAG, "Buffer overflow, resetting");
+                ESP_LOGW(TAG, "Buffer overflow, resetting");
                 ctx->rx_len = 0;
             }
         }
@@ -592,71 +610,75 @@ static void fs_proxy_task(void *arg)
 }
 
 // Public API: Create and start fs_proxy task
-fmrb_err_t fs_proxy_create_task(void)
+esp_err_t fs_proxy_create_task(void)
 {
     static fs_proxy_context_t ctx;
 
     memset(&ctx, 0, sizeof(ctx));
 
-    // Open UART device
-#ifdef CONFIG_IDF_TARGET_LINUX
-    // Device path from environment variable or default
-    const char *uart_device = getenv("FMRB_FS_PROXY_UART");
-    if (!uart_device) {
-        uart_device = "/dev/pts/3";
-    }
-#else
-    const char *uart_device = NULL;
-#endif
+    // Configure UART
+    ctx.uart_num = FS_PROXY_UART_NUM;
 
-    fmrb_uart_config_t uart_config = {
-        .device_path = uart_device,   // POSIX only
-        .uart_num = 0,                // ESP32: UART0
-        .tx_pin = FMRB_PIN_FSPROXY_TX,  // ESP32: UART TX
-        .rx_pin = FMRB_PIN_FSPROXY_RX,  // ESP32: UART RX
-        .baud_rate = 115200,
-        .timeout_ms = 100
+    uart_config_t uart_config = {
+        .baud_rate = FS_PROXY_UART_BAUD_RATE,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
     };
 
-    fmrb_err_t err = fmrb_hal_uart_open(&uart_config, &ctx.uart);
-    if (err != FMRB_OK) {
-#ifdef CONFIG_IDF_TARGET_LINUX
-        FMRB_LOGE(TAG, "Failed to open UART device %s", uart_device);
-#else
-        FMRB_LOGE(TAG, "Failed to open UART%d (TX:GPIO%d, RX:GPIO%d)",
-                  uart_config.uart_num, uart_config.tx_pin, uart_config.rx_pin);
-#endif
+    // Install UART driver
+    esp_err_t err = uart_driver_install(ctx.uart_num, FS_PROXY_UART_BUF_SIZE, FS_PROXY_UART_BUF_SIZE, 0, NULL, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to install UART driver: %s", esp_err_to_name(err));
         return err;
     }
 
-#ifdef CONFIG_IDF_TARGET_LINUX
-    FMRB_LOGI(TAG, "Opened UART device %s", uart_device);
-#else
-    FMRB_LOGI(TAG, "Opened UART%d (TX:GPIO%d, RX:GPIO%d, baud:%d)",
-              uart_config.uart_num, uart_config.tx_pin, uart_config.rx_pin, uart_config.baud_rate);
-#endif
+    // Configure UART parameters
+    err = uart_param_config(ctx.uart_num, &uart_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure UART parameters: %s", esp_err_to_name(err));
+        uart_driver_delete(ctx.uart_num);
+        return err;
+    }
+
+    // Set UART pins
+    err = uart_set_pin(ctx.uart_num, FS_PROXY_UART_TX_PIN, FS_PROXY_UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set UART pins: %s", esp_err_to_name(err));
+        uart_driver_delete(ctx.uart_num);
+        return err;
+    }
+
+    ESP_LOGI(TAG, "Opened UART%d (TX:GPIO%d, RX:GPIO%d, baud:%d)",
+             ctx.uart_num, FS_PROXY_UART_TX_PIN, FS_PROXY_UART_RX_PIN, FS_PROXY_UART_BAUD_RATE);
 
     // Create mutex for thread safety
-    ctx.mutex = fmrb_semaphore_create_mutex();
+    ctx.mutex = xSemaphoreCreateMutex();
     if (ctx.mutex == NULL) {
-        fmrb_hal_uart_close(ctx.uart);
-        return FMRB_ERR_NO_MEMORY;
+        ESP_LOGE(TAG, "Failed to create mutex");
+        uart_driver_delete(ctx.uart_num);
+        return ESP_ERR_NO_MEM;
     }
 
     // Create task
-    fmrb_base_type_t result = fmrb_task_create(
+    BaseType_t result = xTaskCreate(
         fs_proxy_task,
         "fs_proxy",
-        FMRB_FSPROXY_TASK_STACK_SIZE,
+        FS_PROXY_TASK_STACK_SIZE,
         &ctx,
-        FMRB_FSPROXY_TASK_PRIORITY,
+        FS_PROXY_TASK_PRIORITY,
         &task_handle
     );
 
-    if (result == FMRB_PASS) {
-        return FMRB_OK;
+    if (result != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create task");
+        vSemaphoreDelete(ctx.mutex);
+        uart_driver_delete(ctx.uart_num);
+        return ESP_FAIL;
     }
 
-    fmrb_hal_uart_close(ctx.uart);
-    return FMRB_ERR_FAILED;
+    ESP_LOGI(TAG, "FS Proxy task created successfully");
+    return ESP_OK;
 }
