@@ -41,12 +41,16 @@ static const char *TAG = "fs_proxy";
 #define FS_PROXY_MAX_JSON_LEN 4096
 
 // Command codes (from fmrb_test_server.rb)
+#define CMD_SYNC 0x01  // Synchronization command
 #define CMD_CD  0x11
 #define CMD_LS  0x12
 #define CMD_RM  0x13
 #define CMD_GET 0x21
 #define CMD_PUT 0x22
 #define RESP_CODE 0x00
+
+// Magic bytes for synchronization
+#define SYNC_MAGIC "FMRB"
 
 static TaskHandle_t task_handle = NULL;
 
@@ -528,6 +532,14 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
     size_t response_binary_size = 0;
 
     switch (cmd) {
+        case CMD_SYNC:
+            // Synchronization command - send magic bytes
+            snprintf(json_response, sizeof(json_response),
+                    "{\"status\":\"ok\",\"magic\":\"%s\",\"version\":\"1.0\"}", SYNC_MAGIC);
+            send_response(ctx->uart_num, json_response, NULL, 0);
+            ESP_LOGI(TAG, "SYNC command received");
+            break;
+
         case CMD_CD:
             cmd_cd(ctx, json_params, json_response, sizeof(json_response));
             send_response(ctx->uart_num, json_response, NULL, 0);
@@ -574,13 +586,28 @@ static void fs_proxy_task(void *arg)
 
     ESP_LOGI(TAG, "Entering main loop (priority=%d)", FS_PROXY_TASK_PRIORITY);
 
+    // Send startup beacon with magic bytes
+    const char *startup_msg = "FMRB_READY\n";
+    uart_write_bytes(ctx->uart_num, startup_msg, strlen(startup_msg));
+    // Note: Don't use uart_flush() as it may block indefinitely
+
+    uint32_t idle_counter = 0;
+    const uint32_t BEACON_INTERVAL = 50; // Send beacon every 5 seconds (50 * 100ms)
+
     // Main loop: read from UART and process frames
     while (1) {
         uint8_t byte;
         int len = uart_read_bytes(ctx->uart_num, &byte, 1, pdMS_TO_TICKS(100));
 
         if (len == 0) {
-            // No data available, continue
+            // No data available
+            // TODO: Beacon disabled for debugging
+            // idle_counter++;
+            // if (idle_counter >= BEACON_INTERVAL) {
+            //     const char *beacon = "FMRB\n";
+            //     uart_write_bytes(ctx->uart_num, beacon, strlen(beacon));
+            //     idle_counter = 0;
+            // }
             continue;
         } else if (len < 0) {
             // Error reading, delay and retry
@@ -588,6 +615,9 @@ static void fs_proxy_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
+
+        // Reset idle counter when we receive data
+        idle_counter = 0;
 
         if (byte == FS_PROXY_DELIM) {
             // Frame complete

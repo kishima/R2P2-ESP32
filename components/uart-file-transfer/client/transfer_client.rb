@@ -89,9 +89,78 @@ class SerialClient
     end
 
     @rx = String.new(encoding: "ASCII-8BIT")
+
+    # Perform initial synchronization
+    #sync
   end
 
   def close; @sp.close rescue nil; end
+
+  # Synchronization: Clear buffer and wait for magic bytes
+  def sync(retries: 3, timeout: 6.0)
+    # Wait for beacon from server (FMRB or FMRB_READY)
+    magic = "FMRB"
+
+    puts "Waiting for server beacon..."
+
+    retries.times do |attempt|
+      begin
+        # Clear receive buffer
+        begin
+          if @is_pty
+            begin
+              @sp.read_nonblock(4096) while true
+            rescue IO::WaitReadable, Errno::EAGAIN, EOFError
+              # Buffer is empty
+            end
+          else
+            @sp.flush_input if @sp.respond_to?(:flush_input)
+          end
+        rescue EOFError
+          # Ignore
+        end
+        @rx.clear
+
+        # Simply wait for beacon (don't send anything)
+        deadline = Time.now + timeout
+        buffer = String.new(encoding: "ASCII-8BIT")
+
+        while Time.now < deadline
+          ready = IO.select([@sp], nil, nil, 0.5)
+          next unless ready
+
+          begin
+            chunk = @sp.read_nonblock(1024)
+            next if chunk.nil? || chunk.empty?
+
+            buffer << chunk
+            # Keep last 50 bytes
+            buffer = buffer[-50..-1] if buffer.bytesize > 50
+
+            # Look for magic bytes (FMRB or FMRB_READY)
+            if buffer.include?(magic)
+              puts "✓ Detected server beacon"
+              @rx.clear
+              return true
+            end
+          rescue IO::WaitReadable, Errno::EAGAIN
+            next
+          rescue EOFError
+            sleep 0.1
+            next
+          end
+        end
+
+        puts "Sync attempt #{attempt + 1}/#{retries} timed out, retrying..." if attempt < retries - 1
+      rescue => e
+        puts "Sync attempt #{attempt + 1} failed: #{e.message}"
+      end
+
+      sleep 0.5 if attempt < retries - 1
+    end
+
+    raise "Failed to detect server beacon after #{retries} attempts. Is ESP32 running?"
+  end
 
   # --- High-level commands ---
   def r_cd(path)  = cmd_simple(0x11, path: path)         # remote cd

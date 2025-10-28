@@ -66,6 +66,11 @@ end
   end
 end
 
+desc "Menuconfig"
+task :menuconfig do
+  sh "#{DOCKER_CMD_INTERACTIVE} idf.py menuconfig"
+end
+
 desc "Build the ESP32 project"
 task :build do
   sh "#{DOCKER_CMD} idf.py build"
