@@ -1,0 +1,508 @@
+---
+generated_at: '2025-10-29 09:41:34 +0900'
+source_files:
+- M5Unified.hpp
+- LGFXBase.hpp
+classes:
+- name: M5Unified
+  namespace: m5::m5
+  file: M5Unified.hpp
+  methods:
+  - name: getPin
+    return_type: int8_t
+    parameters:
+    - type: pin_name_t
+      name: name
+    modifiers:
+    - static
+    line: 250
+  - name: getDisplayCount
+    return_type: std::size_t
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - const
+    line: 260
+  - name: addDisplay
+    return_type: std::size_t
+    parameters:
+    - type: M5GFX&
+      name: dsp
+    modifiers: []
+    line: 262
+  - name: getDisplayIndex
+    return_type: int32_t
+    parameters:
+    - type: m5gfx::board_t
+      name: board
+    modifiers: []
+    line: 266
+  - name: getDisplayIndex
+    return_type: int32_t
+    parameters:
+    - type: std::initializer_list<m5gfx::board_t>
+      name: board_list
+    modifiers: []
+    line: 268
+  - name: setPrimaryDisplay
+    return_type: bool
+    parameters:
+    - type: std::size_t
+      name: index
+    modifiers: []
+    line: 271
+  - name: setPrimaryDisplayType
+    return_type: bool
+    parameters:
+    - type: std::initializer_list<m5gfx::board_t>
+      name: board_list
+    modifiers: []
+    line: 275
+  - name: setPrimaryDisplayType
+    return_type: bool
+    parameters:
+    - type: m5gfx::board_t
+      name: board
+    modifiers: []
+    line: 278
+  - name: setLogDisplayIndex
+    return_type: void
+    parameters:
+    - type: size_t
+      name: index
+    modifiers: []
+    line: 281
+  - name: setLogDisplayType
+    return_type: void
+    parameters:
+    - type: std::initializer_list<m5gfx::board_t>
+      name: board_list
+    modifiers: []
+    line: 283
+  - name: setLogDisplayType
+    return_type: void
+    parameters:
+    - type: m5gfx::board_t
+      name: board
+    modifiers: []
+    line: 285
+  - name: getUpdateMsec
+    return_type: std::uint32_t
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - const
+    line: 288
+  - name: config_t
+    return_type: return
+    parameters: []
+    modifiers: []
+    line: 292
+  - name: getBoard
+    return_type: board_t
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - const
+    line: 316
+  - name: update
+    return_type: void
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - virtual
+    line: 319
+  - name: dsp
+    return_type: M5AtomDisplay
+    parameters:
+    - type: cfg.atom_display
+      name: ''
+    modifiers: []
+    line: 364
+  - name: dsp
+    return_type: M5ModuleDisplay
+    parameters:
+    - type: cfg.module_display
+      name: ''
+    modifiers: []
+    line: 388
+  - name: dsp
+    return_type: M5UnitOLED
+    parameters:
+    - type: cfg.unit_oled
+      name: ''
+    modifiers: []
+    line: 431
+  - name: dsp
+    return_type: M5UnitMiniOLED
+    parameters:
+    - type: cfg.unit_mini_oled
+      name: ''
+    modifiers: []
+    line: 455
+  - name: dsp
+    return_type: M5UnitGLASS
+    parameters:
+    - type: cfg.unit_glass
+      name: ''
+    modifiers: []
+    line: 479
+  - name: dsp
+    return_type: M5UnitGLASS2
+    parameters:
+    - type: cfg.unit_glass2
+      name: ''
+    modifiers: []
+    line: 503
+  - name: dsp
+    return_type: M5UnitLCD
+    parameters:
+    - type: cfg.unit_lcd
+      name: ''
+    modifiers: []
+    line: 527
+  - name: dsp
+    return_type: M5ModuleRCA
+    parameters:
+    - type: cfg.module_rca
+      name: ''
+    modifiers: []
+    line: 556
+  - name: dsp
+    return_type: M5UnitRCA
+    parameters:
+    - type: cfg.unit_rca
+      name: ''
+    modifiers: []
+    line: 579
+  - name: setTouchButtonHeightByRatio
+    return_type: void
+    parameters:
+    - type: uint8_t
+      name: ratio
+    modifiers: []
+    line: 597
+  - name: setTouchButtonHeight
+    return_type: void
+    parameters:
+    - type: uint16_t
+      name: pixel
+    modifiers: []
+    line: 598
+  - name: getTouchButtonHeight
+    return_type: uint16_t
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - const
+    line: 599
+- name: LGFX_Device
+  namespace: lgfx
+  file: LGFXBase.hpp
+  methods:
+  - name: init
+    return_type: bool
+    parameters:
+    - type: void
+      name: ''
+    modifiers: []
+    line: 1410
+  - name: begin
+    return_type: bool
+    parameters:
+    - type: void
+      name: ''
+    modifiers: []
+    line: 1411
+  - name: init_without_reset
+    return_type: bool
+    parameters:
+    - type: bool
+      name: clear
+    modifiers: []
+    line: 1412
+  - name: getBoard
+    return_type: board_t
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - const
+    line: 1413
+  - name: initBus
+    return_type: void
+    parameters:
+    - type: void
+      name: ''
+    modifiers: []
+    line: 1414
+  - name: releaseBus
+    return_type: void
+    parameters:
+    - type: void
+      name: ''
+    modifiers: []
+    line: 1415
+  - name: setPanel
+    return_type: void
+    parameters:
+    - type: Panel_Device*
+      name: panel
+    modifiers: []
+    line: 1416
+  - name: setEpdMode
+    return_type: void
+    parameters:
+    - type: epd_mode_t
+      name: epd_mode
+    modifiers: []
+    line: 1418
+  - name: getEpdMode
+    return_type: epd_mode_t
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - const
+    line: 1419
+  - name: invertDisplay
+    return_type: void
+    parameters:
+    - type: bool
+      name: i
+    modifiers:
+    - inline
+    line: 1420
+  - name: getInvert
+    return_type: bool
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - inline
+    - const
+    line: 1421
+  - name: sleep
+    return_type: void
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - inline
+    line: 1423
+  - name: wakeup
+    return_type: void
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - inline
+    line: 1424
+  - name: powerSave
+    return_type: void
+    parameters:
+    - type: bool
+      name: flg
+    modifiers:
+    - inline
+    line: 1425
+  - name: powerSaveOn
+    return_type: void
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - inline
+    line: 1426
+  - name: powerSaveOff
+    return_type: void
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - inline
+    line: 1427
+  - name: panel
+    return_type: Panel_Device*
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - inline
+    - const
+    line: 1429
+  - name: getPanel
+    return_type: Panel_Device*
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - inline
+    - const
+    line: 1430
+  - name: panel
+    return_type: void
+    parameters:
+    - type: Panel_Device*
+      name: panel
+    modifiers:
+    - inline
+    line: 1431
+  - name: writeCommand
+    return_type: void
+    parameters:
+    - type: uint8_t
+      name: cmd
+    modifiers:
+    - inline
+    line: 1433
+  - name: writecommand
+    return_type: void
+    parameters:
+    - type: uint8_t
+      name: cmd
+    modifiers:
+    - inline
+    line: 1434
+  - name: writeCommand16
+    return_type: void
+    parameters:
+    - type: uint16_t
+      name: cmd
+    modifiers:
+    - inline
+    line: 1435
+  - name: spiWrite
+    return_type: void
+    parameters:
+    - type: uint8_t
+      name: data
+    modifiers:
+    - inline
+    line: 1436
+  - name: writedata
+    return_type: void
+    parameters:
+    - type: uint8_t
+      name: data
+    modifiers:
+    - inline
+    line: 1437
+  - name: writeData
+    return_type: void
+    parameters:
+    - type: uint8_t
+      name: data
+    modifiers:
+    - inline
+    line: 1438
+  - name: writeData16
+    return_type: void
+    parameters:
+    - type: uint16_t
+      name: data
+    modifiers:
+    - inline
+    line: 1439
+  - name: writeData32
+    return_type: void
+    parameters:
+    - type: uint32_t
+      name: data
+    modifiers:
+    - inline
+    line: 1440
+  - name: readData8
+    return_type: uint8_t
+    parameters:
+    - type: uint8_t
+      name: index
+    modifiers:
+    - inline
+    line: 1442
+  - name: readData16
+    return_type: uint16_t
+    parameters:
+    - type: uint8_t
+      name: index
+    modifiers:
+    - inline
+    line: 1443
+  - name: readData32
+    return_type: uint32_t
+    parameters:
+    - type: uint8_t
+      name: index
+    modifiers:
+    - inline
+    line: 1444
+  - name: light
+    return_type: ILight*
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - inline
+    - const
+    line: 1446
+  - name: setBrightness
+    return_type: void
+    parameters:
+    - type: uint8_t
+      name: brightness
+    modifiers:
+    - inline
+    line: 1447
+  - name: getBrightness
+    return_type: uint8_t
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - inline
+    - const
+    line: 1448
+  - name: touch
+    return_type: ITouch*
+    parameters:
+    - type: void
+      name: ''
+    modifiers:
+    - inline
+    - const
+    line: 1450
+  - name: getTouchRaw
+    return_type: uint_fast8_t
+    parameters:
+    - type: touch_point_t
+      name: "*tp"
+    - type: uint_fast8_t
+      name: count
+    modifiers:
+    - inline
+    line: 1451
+  - name: getTouch
+    return_type: uint_fast8_t
+    parameters:
+    - type: touch_point_t
+      name: "*tp"
+    - type: uint_fast8_t
+      name: count
+    modifiers:
+    - inline
+    line: 1452
+  - name: convertRawXY
+    return_type: void
+    parameters:
+    - type: touch_point_t
+      name: "*tp"
+    - type: uint_fast8_t
+      name: count
+    modifiers:
+    - inline
+    line: 1453
