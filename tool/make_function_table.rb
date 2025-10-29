@@ -21,13 +21,19 @@ TARGET_FILES = [
   "#{PROJECT_ROOT}/components/M5GFX/src/lgfx/v1/LGFXBase.hpp"
 ]
 
+# Classes to extract (if nil, extract all classes)
+# LGFXBase includes all drawing and hardware control methods
+# LGFX_Device is excluded as its methods are already in LGFXBase
+TARGET_CLASSES = ['M5Unified', 'LGFXBase']
+
 class CppParser
   # Match method declarations
   # Examples:
   #   void update()
   #   static bool begin(config_t cfg)
   #   board_t getBoard() const
-  METHOD_REGEX = /^\s*(?:(static|virtual|inline)\s+)?(\w+(?:::\w+)*(?:<[^>]+>)?(?:\s*\*)?)\s+(\w+)\s*\(([^)]*)\)\s*(const)?\s*[;{]/
+  #   LGFX_INLINE void drawPixel(int x, int y)
+  METHOD_REGEX = /^\s*(?:(?:LGFX_INLINE(?:_T)?|static|virtual|inline)\s+)*(\w+(?:::\w+)*(?:<[^>]+>)?(?:\s*[*&])?)\s+(\w+)\s*\(([^)]*)\)\s*(const)?\s*[;{]/
 
   # Match class definitions
   CLASS_REGEX = /^\s*class\s+(\w+)/
@@ -54,14 +60,12 @@ class CppParser
     current_namespace = []
     current_section = nil
     brace_depth = 0
+    class_brace_depth = 0
     line_number = 0
+    in_target_class = false
 
     lines.each do |line|
       line_number += 1
-
-      # Track brace depth for scope
-      brace_depth += line.count('{')
-      brace_depth -= line.count('}')
 
       # Detect namespace
       if match = line.match(NAMESPACE_REGEX)
@@ -71,17 +75,26 @@ class CppParser
       # Detect class definition
       if match = line.match(CLASS_REGEX)
         class_name = match[1]
-        current_class = {
-          'name' => class_name,
-          'namespace' => current_namespace.join('::'),
-          'file' => File.basename(filepath),
-          'methods' => []
-        }
-        current_section = nil
+        # Only track target classes
+        if TARGET_CLASSES.nil? || TARGET_CLASSES.include?(class_name)
+          current_class = {
+            'name' => class_name,
+            'namespace' => current_namespace.join('::'),
+            'file' => File.basename(filepath),
+            'methods' => []
+          }
+          current_section = nil
+          in_target_class = true
+          class_brace_depth = brace_depth
+        end
       end
 
+      # Track brace depth for scope
+      brace_depth += line.count('{')
+      brace_depth -= line.count('}')
+
       # Detect section (public/private/protected)
-      if match = line.match(SECTION_REGEX)
+      if in_target_class && match = line.match(SECTION_REGEX)
         current_section = match[1]
       end
 
@@ -92,11 +105,12 @@ class CppParser
         end
       end
 
-      # End of class definition
-      if current_class && brace_depth == 0 && line.include?('}')
+      # End of class definition (when brace depth returns to class level)
+      if in_target_class && brace_depth <= class_brace_depth && line.include?('}')
         @classes << current_class unless current_class['methods'].empty?
         current_class = nil
         current_section = nil
+        in_target_class = false
       end
     end
   end
@@ -111,17 +125,15 @@ class CppParser
     match = line.match(METHOD_REGEX)
     return nil unless match
 
-    modifier = match[1]
-    return_type = match[2].strip
-    method_name = match[3]
-    params_str = match[4]
-    is_const = match[5]
+    return_type = match[1].strip
+    method_name = match[2]
+    params_str = match[3]
+    is_const = match[4]
 
     # Skip if method name looks like constructor
     return nil if method_name == method_name.capitalize && !return_type.include?('::')
 
     modifiers = []
-    modifiers << modifier if modifier
     modifiers << 'const' if is_const
 
     parameters = parse_parameters(params_str)

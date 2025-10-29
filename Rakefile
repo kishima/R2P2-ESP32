@@ -50,6 +50,8 @@ end
 
 desc "Build the ESP32 project"
 task :build do
+  sh "rm -rf components/picoruby-esp32/picoruby/mrbgems/picoruby-m5unified"
+  sh "cp -r mrbgem/picoruby-m5unified components/picoruby-esp32/picoruby/mrbgems/"
   sh "#{DOCKER_CMD} idf.py build"
   #sh "idf.py build"
 end
