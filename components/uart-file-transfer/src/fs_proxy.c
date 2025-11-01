@@ -62,6 +62,11 @@ static const char *TAG = "fs_proxy";
 // Magic bytes for synchronization (Uart File Transfer for ESP32)
 #define SYNC_MAGIC "UFTE"
 
+// JSON Response Builder Macros
+#define RESP_ERROR(msg)  "{\"ok\":false,\"err\":\"" msg "\"}"
+#define RESP_OK_MSG(msg) "{\"ok\":true,\"msg\":\"" msg "\"}"
+#define RESP_OK          "{\"ok\":true}"
+
 static TaskHandle_t task_handle = NULL;
 
 // CRC32 lookup table (standard polynomial 0xEDB88320)
@@ -269,18 +274,18 @@ static void cmd_cd(fs_proxy_context_t *ctx, const char *json_params, char *respo
     char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN);
 
     if (!path || !fatfs_path) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Memory allocation failed\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Memory allocation failed"));
         goto cleanup;
     }
 
     if (!json_get_string(json_params, "path", path, FS_PROXY_MAX_PATH_LEN)) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Missing path parameter\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Missing path parameter"));
         goto cleanup;
     }
 
     // Convert path to FatFs format (e.g., "/" -> "0:/")
     if (!posix_to_fatfs_path(path, fatfs_path, FS_PROXY_MAX_PATH_LEN)) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Path too long"));
         goto cleanup;
     }
 
@@ -288,7 +293,7 @@ static void cmd_cd(fs_proxy_context_t *ctx, const char *json_params, char *respo
     DIR dir;
     FRESULT res = f_opendir(&dir, fatfs_path);
     if (res != FR_OK) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Directory not found\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Directory not found"));
         goto cleanup;
     }
     f_closedir(&dir);
@@ -297,7 +302,7 @@ static void cmd_cd(fs_proxy_context_t *ctx, const char *json_params, char *respo
     strncpy(ctx->current_dir, path, sizeof(ctx->current_dir) - 1);
     ctx->current_dir[sizeof(ctx->current_dir) - 1] = '\0';
 
-    snprintf(response, response_size, "{\"ok\":true}");
+    snprintf(response, response_size, "%s", RESP_OK);
 
 cleanup:
     fs_proxy_free(path);
@@ -312,7 +317,7 @@ static void cmd_ls(fs_proxy_context_t *ctx, const char *json_params, char *respo
     char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN);
 
     if (!path || !fatfs_path) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Memory allocation failed\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Memory allocation failed"));
         goto cleanup;
     }
 
@@ -323,14 +328,14 @@ static void cmd_ls(fs_proxy_context_t *ctx, const char *json_params, char *respo
 
     // Convert path to FatFs format (e.g., "/" -> "0:/")
     if (!posix_to_fatfs_path(path, fatfs_path, FS_PROXY_MAX_PATH_LEN)) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Path too long"));
         goto cleanup;
     }
 
     DIR dir;
     FRESULT res = f_opendir(&dir, fatfs_path);
     if (res != FR_OK) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Cannot open directory\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Cannot open directory"));
         ESP_LOGE(TAG, "f_opendir failed: %d, path=%s", res, fatfs_path);
         goto cleanup;
     }
@@ -378,29 +383,29 @@ static void cmd_rm(fs_proxy_context_t *ctx, const char *json_params, char *respo
     char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN);
 
     if (!path || !fatfs_path) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Memory allocation failed\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Memory allocation failed"));
         goto cleanup;
     }
 
     if (!json_get_string(json_params, "path", path, FS_PROXY_MAX_PATH_LEN)) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Missing path parameter\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Missing path parameter"));
         goto cleanup;
     }
 
     // Convert path to FatFs format (e.g., "/" -> "0:/")
     if (!posix_to_fatfs_path(path, fatfs_path, FS_PROXY_MAX_PATH_LEN)) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Path too long"));
         goto cleanup;
     }
 
     // Remove file or directory (f_unlink works for both in FatFs)
     FRESULT res = f_unlink(fatfs_path);
     if (res != FR_OK) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Failed to remove\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Failed to remove"));
         goto cleanup;
     }
 
-    snprintf(response, response_size, "{\"ok\":true}");
+    snprintf(response, response_size, "%s", RESP_OK);
 
 cleanup:
     fs_proxy_free(path);
@@ -420,13 +425,13 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
     int32_t offset = 0;
 
     if (!path || !fatfs_path) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Memory allocation failed\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Memory allocation failed"));
         *binary_size = 0;
         goto cleanup;
     }
 
     if (!json_get_string(json_params, "path", path, FS_PROXY_MAX_PATH_LEN)) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Missing path parameter\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Missing path parameter"));
         *binary_size = 0;
         goto cleanup;
     }
@@ -436,7 +441,7 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
 
     // Convert path to FatFs format (e.g., "/" -> "0:/")
     if (!posix_to_fatfs_path(path, fatfs_path, FS_PROXY_MAX_PATH_LEN)) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Path too long"));
         *binary_size = 0;
         goto cleanup;
     }
@@ -444,7 +449,7 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
     FIL file;
     FRESULT res = f_open(&file, fatfs_path, FA_READ);
     if (res != FR_OK) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Cannot open file\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Cannot open file"));
         *binary_size = 0;
         goto cleanup;
     }
@@ -454,7 +459,7 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
         res = f_lseek(&file, offset);
         if (res != FR_OK) {
             f_close(&file);
-            snprintf(response, response_size, "{\"ok\":false,\"err\":\"Seek failed\"}");
+            snprintf(response, response_size, "%s", RESP_ERROR("Seek failed"));
             *binary_size = 0;
             goto cleanup;
         }
@@ -466,7 +471,7 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
     f_close(&file);
 
     if (res != FR_OK) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Read failed\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Read failed"));
         *binary_size = 0;
         goto cleanup;
     }
@@ -497,12 +502,12 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
     int32_t offset = 0;
 
     if (!path || !fatfs_path) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Memory allocation failed\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Memory allocation failed"));
         goto cleanup;
     }
 
     if (!json_get_string(json_params, "path", path, FS_PROXY_MAX_PATH_LEN)) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Missing path parameter\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Missing path parameter"));
         goto cleanup;
     }
 
@@ -511,7 +516,7 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
 
     // Convert path to FatFs format (e.g., "/" -> "0:/")
     if (!posix_to_fatfs_path(path, fatfs_path, FS_PROXY_MAX_PATH_LEN)) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Path too long"));
         goto cleanup;
     }
 
@@ -526,7 +531,7 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
     }
 
     if (res != FR_OK) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Cannot open file\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Cannot open file"));
         goto cleanup;
     }
 
@@ -535,7 +540,7 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
         res = f_lseek(&file, offset);
         if (res != FR_OK) {
             f_close(&file);
-            snprintf(response, response_size, "{\"ok\":false,\"err\":\"Seek failed\"}");
+            snprintf(response, response_size, "%s", RESP_ERROR("Seek failed"));
             goto cleanup;
         }
     }
@@ -546,11 +551,11 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
     f_close(&file);
 
     if (res != FR_OK || bytes_written != binary_size) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Write failed\"}");
+        snprintf(response, response_size, "%s", RESP_ERROR("Write failed"));
         goto cleanup;
     }
 
-    snprintf(response, response_size, "{\"ok\":true}");
+    snprintf(response, response_size, "%s", RESP_OK);
 
 cleanup:
     fs_proxy_free(path);
@@ -563,7 +568,7 @@ cleanup:
 static void cmd_reboot(char *response, size_t response_size)
 {
     ESP_LOGI(TAG, "Reboot command received - restarting in 1 second");
-    snprintf(response, response_size, "{\"ok\":true,\"msg\":\"Rebooting...\"}");
+    snprintf(response, response_size, "%s", RESP_OK_MSG("Rebooting..."));
 }
 
 // Send response frame (encode and send via UART)
@@ -649,7 +654,7 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
 
     if (decoded_len < 7) { // Minimum: cmd(1) + len(2) + crc32(4)
         ESP_LOGE(TAG, "Frame too short: %zu bytes", decoded_len);
-        send_response(ctx->uart_num, "{\"ok\":false,\"err\":\"Frame too short\"}", NULL, 0);
+        send_response(ctx->uart_num, RESP_ERROR("Frame too short"), NULL, 0);
         goto cleanup;
     }
 
@@ -661,7 +666,7 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
 
     uint32_t calculated_crc = crc32_calc(decoded, decoded_len - 4);
     if (received_crc != calculated_crc) {
-        send_response(ctx->uart_num, "{\"ok\":false,\"err\":\"CRC mismatch\"}", NULL, 0);
+        send_response(ctx->uart_num, RESP_ERROR("CRC mismatch"), NULL, 0);
         goto cleanup;
     }
 
@@ -670,13 +675,13 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
     uint16_t json_len = ((uint16_t)decoded[1] << 8) | decoded[2];
 
     if (3 + json_len + 4 > decoded_len) {
-        send_response(ctx->uart_num, "{\"ok\":false,\"err\":\"Invalid length\"}", NULL, 0);
+        send_response(ctx->uart_num, RESP_ERROR("Invalid length"), NULL, 0);
         goto cleanup;
     }
 
     // Extract JSON parameters
     if (json_len >= FS_PROXY_MAX_JSON_PARAMS_LEN) {
-        send_response(ctx->uart_num, "{\"ok\":false,\"err\":\"JSON params too long\"}", NULL, 0);
+        send_response(ctx->uart_num, RESP_ERROR("JSON params too long"), NULL, 0);
         goto cleanup;
     }
     memcpy(json_params, decoded + 3, json_len);
@@ -817,7 +822,7 @@ static void fs_proxy_task(void *arg)
 
         // Debug: log received byte (only first 50 bytes to avoid log spam)
         if (ctx->rx_len < 50) {
-            ESP_LOGI(TAG, "RX byte[%zu]: 0x%02x (%c)", ctx->rx_len, byte, (byte >= 32 && byte < 127) ? byte : '.');
+            ESP_LOGD(TAG, "RX byte[%zu]: 0x%02x (%c)", ctx->rx_len, byte, (byte >= 32 && byte < 127) ? byte : '.');
         }
 
         // Reset idle counter when we receive data
@@ -833,7 +838,7 @@ static void fs_proxy_task(void *arg)
                 for (size_t i = 0; i < ctx->rx_len && i < 32; i++) {
                     hex_len += snprintf(hex_buf + hex_len, 128 - hex_len, "%02x ", ctx->rx_buffer[i]);
                 }
-                ESP_LOGI(TAG, "Frame data: %s%s", hex_buf, ctx->rx_len > 32 ? "..." : "");
+                ESP_LOGD(TAG, "Frame data: %s%s", hex_buf, ctx->rx_len > 32 ? "..." : "");
 
                 process_frame(ctx, ctx->rx_buffer, ctx->rx_len);
                 ctx->rx_len = 0;
@@ -857,22 +862,22 @@ static void fs_proxy_task(void *arg)
 static void init_fat(void)
 {
     // Initialize flash disk using picoruby-filesystem-fat implementation
-    ESP_LOGI("main", "Initializing flash disk...");
+    ESP_LOGI(TAG, "Initializing flash disk...");
     int ret = FLASH_disk_initialize();
     if (ret != 0) {
-        ESP_LOGE("main", "Failed to initialize flash disk: %d", ret);
+        ESP_LOGE(TAG, "Failed to initialize flash disk: %d", ret);
     } else {
-        ESP_LOGI("main", "Flash disk initialized successfully");
+        ESP_LOGI(TAG, "Flash disk initialized successfully");
     }
 
     // Mount FatFs
-    ESP_LOGI("main", "Mounting FatFs...");
+    ESP_LOGI(TAG, "Mounting FatFs...");
     static FATFS fs;
     FRESULT fret = f_mount(&fs, "1:", 1);  // Drive 1 (FLASH), mount immediately
     if (fret != FR_OK) {
-        ESP_LOGE("main", "Failed to mount FatFs: %d", fret);
+        ESP_LOGE(TAG, "Failed to mount FatFs: %d", fret);
     } else {
-        ESP_LOGI("main", "FatFs mounted successfully at 1:");
+        ESP_LOGI(TAG, "FatFs mounted successfully at 1:");
     }
 
 }
@@ -885,12 +890,17 @@ esp_err_t fs_proxy_create_task(void)
 
     init_fat();
 
-    static fs_proxy_context_t ctx;
+    // Allocate context dynamically
+    fs_proxy_context_t* ctx = (fs_proxy_context_t*)fs_proxy_malloc(sizeof(fs_proxy_context_t));
+    if (!ctx) {
+        ESP_LOGE(TAG, "Failed to allocate context memory");
+        return ESP_ERR_NO_MEM;
+    }
 
-    memset(&ctx, 0, sizeof(ctx));
+    memset(ctx, 0, sizeof(fs_proxy_context_t));
 
     // Configure UART
-    ctx.uart_num = FS_PROXY_UART_NUM;
+    ctx->uart_num = FS_PROXY_UART_NUM;
 
     uart_config_t uart_config = {
         .baud_rate = FS_PROXY_UART_BAUD_RATE,
@@ -903,43 +913,47 @@ esp_err_t fs_proxy_create_task(void)
 
     // First, try to delete any existing driver (in case UART0 was used by bootloader/console)
     // This is safe to call even if no driver is installed
-    uart_driver_delete(ctx.uart_num);
+    uart_driver_delete(ctx->uart_num);
 
     // Install UART driver
-    esp_err_t err = uart_driver_install(ctx.uart_num, FS_PROXY_UART_BUF_SIZE, FS_PROXY_UART_BUF_SIZE, 0, NULL, 0);
+    esp_err_t err = uart_driver_install(ctx->uart_num, FS_PROXY_UART_BUF_SIZE, FS_PROXY_UART_BUF_SIZE, 0, NULL, 0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to install UART driver: %s", esp_err_to_name(err));
+        fs_proxy_free(ctx);
         return err;
     }
 
     // Configure UART parameters
-    err = uart_param_config(ctx.uart_num, &uart_config);
+    err = uart_param_config(ctx->uart_num, &uart_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to configure UART parameters: %s", esp_err_to_name(err));
-        uart_driver_delete(ctx.uart_num);
+        uart_driver_delete(ctx->uart_num);
+        fs_proxy_free(ctx);
         return err;
     }
 
     // Set UART pins
-    err = uart_set_pin(ctx.uart_num, FS_PROXY_UART_TX_PIN, FS_PROXY_UART_RX_PIN,
+    err = uart_set_pin(ctx->uart_num, FS_PROXY_UART_TX_PIN, FS_PROXY_UART_RX_PIN,
                        UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set UART pins: %s", esp_err_to_name(err));
-        uart_driver_delete(ctx.uart_num);
+        uart_driver_delete(ctx->uart_num);
+        fs_proxy_free(ctx);
         return err;
     }
 
     // Clear any stale data in RX buffer (from bootloader/ROM)
-    uart_flush_input(ctx.uart_num);
+    uart_flush_input(ctx->uart_num);
 
     ESP_LOGI(TAG, "Opened UART%d (TX:GPIO%d, RX:GPIO%d, baud:%d)",
-             ctx.uart_num, FS_PROXY_UART_TX_PIN, FS_PROXY_UART_RX_PIN, FS_PROXY_UART_BAUD_RATE);
+             ctx->uart_num, FS_PROXY_UART_TX_PIN, FS_PROXY_UART_RX_PIN, FS_PROXY_UART_BAUD_RATE);
 
     // Create mutex for thread safety
-    ctx.mutex = xSemaphoreCreateMutex();
-    if (ctx.mutex == NULL) {
+    ctx->mutex = xSemaphoreCreateMutex();
+    if (ctx->mutex == NULL) {
         ESP_LOGE(TAG, "Failed to create mutex");
-        uart_driver_delete(ctx.uart_num);
+        uart_driver_delete(ctx->uart_num);
+        fs_proxy_free(ctx);
         return ESP_ERR_NO_MEM;
     }
 
@@ -948,15 +962,16 @@ esp_err_t fs_proxy_create_task(void)
         fs_proxy_task,
         "fs_proxy",
         FS_PROXY_TASK_STACK_SIZE,
-        &ctx,
+        ctx,
         FS_PROXY_TASK_PRIORITY,
         &task_handle
     );
 
     if (result != pdPASS) {
         ESP_LOGE(TAG, "Failed to create task");
-        vSemaphoreDelete(ctx.mutex);
-        uart_driver_delete(ctx.uart_num);
+        vSemaphoreDelete(ctx->mutex);
+        uart_driver_delete(ctx->uart_num);
+        fs_proxy_free(ctx);
         return ESP_FAIL;
     }
 
