@@ -110,6 +110,26 @@ static uint32_t crc32_calc(const uint8_t *data, size_t len)
     return crc ^ 0xFFFFFFFF;
 }
 
+// Memory allocation wrappers for future flexibility (e.g., memory pools)
+static void* fs_proxy_malloc(size_t size, const char *tag)
+{
+    void *ptr = malloc(size);
+    if (ptr) {
+        ESP_LOGD(TAG, "Allocated %zu bytes for %s at %p", size, tag, ptr);
+    } else {
+        ESP_LOGE(TAG, "Failed to allocate %zu bytes for %s", size, tag);
+    }
+    return ptr;
+}
+
+static void fs_proxy_free(void *ptr, const char *tag)
+{
+    if (ptr) {
+        ESP_LOGD(TAG, "Freed %s at %p", tag, ptr);
+        free(ptr);
+    }
+}
+
 // COBS encode: removes all 0x00 bytes from payload
 static size_t cobs_encode(const uint8_t *input, size_t input_len, uint8_t *output, size_t output_size)
 {
@@ -238,19 +258,24 @@ static bool json_get_int(const char *json, const char *key, int32_t *value)
 // Command handler: CD (change directory)
 static void cmd_cd(fs_proxy_context_t *ctx, const char *json_params, char *response, size_t response_size)
 {
-    // Use static buffers to reduce stack usage (avoid stack overflow)
-    static char path[FS_PROXY_MAX_PATH_LEN];
-    static char fatfs_path[FS_PROXY_MAX_PATH_LEN];
+    // Allocate buffers dynamically to save memory when not in use
+    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_cd:path");
+    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_cd:fatfs_path");
 
-    if (!json_get_string(json_params, "path", path, sizeof(path))) {
+    if (!path || !fatfs_path) {
+        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Memory allocation failed\"}");
+        goto cleanup;
+    }
+
+    if (!json_get_string(json_params, "path", path, FS_PROXY_MAX_PATH_LEN)) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Missing path parameter\"}");
-        return;
+        goto cleanup;
     }
 
     // Convert path to FatFs format (e.g., "/" -> "0:/")
-    if (!posix_to_fatfs_path(path, fatfs_path, sizeof(fatfs_path))) {
+    if (!posix_to_fatfs_path(path, fatfs_path, FS_PROXY_MAX_PATH_LEN)) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
-        return;
+        goto cleanup;
     }
 
     // Try to open directory to verify it exists
@@ -258,7 +283,7 @@ static void cmd_cd(fs_proxy_context_t *ctx, const char *json_params, char *respo
     FRESULT res = f_opendir(&dir, fatfs_path);
     if (res != FR_OK) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Directory not found\"}");
-        return;
+        goto cleanup;
     }
     f_closedir(&dir);
 
@@ -267,24 +292,33 @@ static void cmd_cd(fs_proxy_context_t *ctx, const char *json_params, char *respo
     ctx->current_dir[sizeof(ctx->current_dir) - 1] = '\0';
 
     snprintf(response, response_size, "{\"ok\":true}");
+
+cleanup:
+    fs_proxy_free(path, "cmd_cd:path");
+    fs_proxy_free(fatfs_path, "cmd_cd:fatfs_path");
 }
 
 // Command handler: LS (list directory)
 static void cmd_ls(fs_proxy_context_t *ctx, const char *json_params, char *response, size_t response_size)
 {
-    // Use static buffers to reduce stack usage (avoid stack overflow)
-    static char path[FS_PROXY_MAX_PATH_LEN];
-    static char fatfs_path[FS_PROXY_MAX_PATH_LEN];
+    // Allocate buffers dynamically to save memory when not in use
+    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_ls:path");
+    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_ls:fatfs_path");
+
+    if (!path || !fatfs_path) {
+        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Memory allocation failed\"}");
+        goto cleanup;
+    }
 
     // Use specified path or current directory
-    if (!json_get_string(json_params, "path", path, sizeof(path))) {
-        strncpy(path, ctx->current_dir, sizeof(path));
+    if (!json_get_string(json_params, "path", path, FS_PROXY_MAX_PATH_LEN)) {
+        strncpy(path, ctx->current_dir, FS_PROXY_MAX_PATH_LEN);
     }
 
     // Convert path to FatFs format (e.g., "/" -> "0:/")
-    if (!posix_to_fatfs_path(path, fatfs_path, sizeof(fatfs_path))) {
+    if (!posix_to_fatfs_path(path, fatfs_path, FS_PROXY_MAX_PATH_LEN)) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
-        return;
+        goto cleanup;
     }
 
     DIR dir;
@@ -292,7 +326,7 @@ static void cmd_ls(fs_proxy_context_t *ctx, const char *json_params, char *respo
     if (res != FR_OK) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Cannot open directory\"}");
         ESP_LOGE(TAG, "f_opendir failed: %d, path=%s", res, fatfs_path);
-        return;
+        goto cleanup;
     }
 
     // Build JSON array of files - format: {"n":"name", "t":"f"/"d", "s":size}
@@ -324,34 +358,47 @@ static void cmd_ls(fs_proxy_context_t *ctx, const char *json_params, char *respo
 
     f_closedir(&dir);
     snprintf(response + pos, response_size - pos, "]}");
+
+cleanup:
+    fs_proxy_free(path, "cmd_ls:path");
+    fs_proxy_free(fatfs_path, "cmd_ls:fatfs_path");
 }
 
 // Command handler: RM (remove file/directory)
 static void cmd_rm(fs_proxy_context_t *ctx, const char *json_params, char *response, size_t response_size)
 {
-    // Use static buffers to reduce stack usage (avoid stack overflow)
-    static char path[FS_PROXY_MAX_PATH_LEN];
-    static char fatfs_path[FS_PROXY_MAX_PATH_LEN];
+    // Allocate buffers dynamically to save memory when not in use
+    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_rm:path");
+    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_rm:fatfs_path");
 
-    if (!json_get_string(json_params, "path", path, sizeof(path))) {
+    if (!path || !fatfs_path) {
+        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Memory allocation failed\"}");
+        goto cleanup;
+    }
+
+    if (!json_get_string(json_params, "path", path, FS_PROXY_MAX_PATH_LEN)) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Missing path parameter\"}");
-        return;
+        goto cleanup;
     }
 
     // Convert path to FatFs format (e.g., "/" -> "0:/")
-    if (!posix_to_fatfs_path(path, fatfs_path, sizeof(fatfs_path))) {
+    if (!posix_to_fatfs_path(path, fatfs_path, FS_PROXY_MAX_PATH_LEN)) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
-        return;
+        goto cleanup;
     }
 
     // Remove file or directory (f_unlink works for both in FatFs)
     FRESULT res = f_unlink(fatfs_path);
     if (res != FR_OK) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Failed to remove\"}");
-        return;
+        goto cleanup;
     }
 
     snprintf(response, response_size, "{\"ok\":true}");
+
+cleanup:
+    fs_proxy_free(path, "cmd_rm:path");
+    fs_proxy_free(fatfs_path, "cmd_rm:fatfs_path");
 }
 
 // Command handler: GET (read file and send contents)
@@ -361,25 +408,31 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
                    char *response, size_t response_size,
                    uint8_t *binary_data, size_t *binary_size, size_t binary_max)
 {
-    // Use static buffers to reduce stack usage (avoid stack overflow)
-    static char path[FS_PROXY_MAX_PATH_LEN];
-    static char fatfs_path[FS_PROXY_MAX_PATH_LEN];
+    // Allocate buffers dynamically to save memory when not in use
+    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_get:path");
+    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_get:fatfs_path");
     int32_t offset = 0;
 
-    if (!json_get_string(json_params, "path", path, sizeof(path))) {
+    if (!path || !fatfs_path) {
+        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Memory allocation failed\"}");
+        *binary_size = 0;
+        goto cleanup;
+    }
+
+    if (!json_get_string(json_params, "path", path, FS_PROXY_MAX_PATH_LEN)) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Missing path parameter\"}");
         *binary_size = 0;
-        return;
+        goto cleanup;
     }
 
     // Get offset (optional, defaults to 0)
     json_get_int(json_params, "off", &offset);
 
     // Convert path to FatFs format (e.g., "/" -> "0:/")
-    if (!posix_to_fatfs_path(path, fatfs_path, sizeof(fatfs_path))) {
+    if (!posix_to_fatfs_path(path, fatfs_path, FS_PROXY_MAX_PATH_LEN)) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
         *binary_size = 0;
-        return;
+        goto cleanup;
     }
 
     FIL file;
@@ -387,7 +440,7 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
     if (res != FR_OK) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Cannot open file\"}");
         *binary_size = 0;
-        return;
+        goto cleanup;
     }
 
     // Seek to offset
@@ -397,7 +450,7 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
             f_close(&file);
             snprintf(response, response_size, "{\"ok\":false,\"err\":\"Seek failed\"}");
             *binary_size = 0;
-            return;
+            goto cleanup;
         }
     }
 
@@ -409,7 +462,7 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
     if (res != FR_OK) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Read failed\"}");
         *binary_size = 0;
-        return;
+        goto cleanup;
     }
 
     *binary_size = bytes_read;
@@ -419,6 +472,10 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
 
     ESP_LOGD(TAG, "GET - path=%s, offset=%d, bytes_read=%u, eof=%s",
              path, offset, bytes_read, eof ? "true" : "false");
+
+cleanup:
+    fs_proxy_free(path, "cmd_get:path");
+    fs_proxy_free(fatfs_path, "cmd_get:fatfs_path");
 }
 
 // Command handler: PUT (write file contents)
@@ -428,23 +485,28 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
                    const uint8_t *binary_data, size_t binary_size,
                    char *response, size_t response_size)
 {
-    // Use static buffers to reduce stack usage (avoid stack overflow)
-    static char path[FS_PROXY_MAX_PATH_LEN];
-    static char fatfs_path[FS_PROXY_MAX_PATH_LEN];
+    // Allocate buffers dynamically to save memory when not in use
+    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_put:path");
+    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_put:fatfs_path");
     int32_t offset = 0;
 
-    if (!json_get_string(json_params, "path", path, sizeof(path))) {
+    if (!path || !fatfs_path) {
+        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Memory allocation failed\"}");
+        goto cleanup;
+    }
+
+    if (!json_get_string(json_params, "path", path, FS_PROXY_MAX_PATH_LEN)) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Missing path parameter\"}");
-        return;
+        goto cleanup;
     }
 
     // Get offset (optional, defaults to 0)
     json_get_int(json_params, "off", &offset);
 
     // Convert path to FatFs format (e.g., "/" -> "0:/")
-    if (!posix_to_fatfs_path(path, fatfs_path, sizeof(fatfs_path))) {
+    if (!posix_to_fatfs_path(path, fatfs_path, FS_PROXY_MAX_PATH_LEN)) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
-        return;
+        goto cleanup;
     }
 
     FIL file;
@@ -459,7 +521,7 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
 
     if (res != FR_OK) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Cannot open file\"}");
-        return;
+        goto cleanup;
     }
 
     // Seek to offset if needed
@@ -468,7 +530,7 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
         if (res != FR_OK) {
             f_close(&file);
             snprintf(response, response_size, "{\"ok\":false,\"err\":\"Seek failed\"}");
-            return;
+            goto cleanup;
         }
     }
 
@@ -479,18 +541,29 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
 
     if (res != FR_OK || bytes_written != binary_size) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Write failed\"}");
-        return;
+        goto cleanup;
     }
 
     snprintf(response, response_size, "{\"ok\":true}");
+
+cleanup:
+    fs_proxy_free(path, "cmd_put:path");
+    fs_proxy_free(fatfs_path, "cmd_put:fatfs_path");
 }
 
 // Send response frame (encode and send via UART)
 static void send_response(uart_port_t uart_num, const char *json_response, const uint8_t *binary_data, size_t binary_size)
 {
-    // Use static buffers to avoid stack overflow (8KB each)
-    static uint8_t packet[FS_PROXY_MAX_FRAME_SIZE];
-    static uint8_t encoded[FS_PROXY_MAX_FRAME_SIZE];
+    // Allocate buffers dynamically to save memory when not in use
+    uint8_t *packet = fs_proxy_malloc(FS_PROXY_MAX_FRAME_SIZE, "packet");
+    uint8_t *encoded = fs_proxy_malloc(FS_PROXY_MAX_FRAME_SIZE, "encoded");
+
+    if (!packet || !encoded) {
+        ESP_LOGE(TAG, "Failed to allocate memory for response");
+        fs_proxy_free(packet, "packet");
+        fs_proxy_free(encoded, "encoded");
+        return;
+    }
 
     size_t json_len = strlen(json_response);
 
@@ -521,35 +594,48 @@ static void send_response(uart_port_t uart_num, const char *json_response, const
     packet[pos++] = crc & 0xFF;
 
     // COBS encode
-    size_t encoded_len = cobs_encode(packet, pos, encoded, sizeof(encoded));
+    size_t encoded_len = cobs_encode(packet, pos, encoded, FS_PROXY_MAX_FRAME_SIZE);
     if (encoded_len == 0) {
-        return; // Encoding failed
+        ESP_LOGE(TAG, "COBS encoding failed");
+        fs_proxy_free(packet, "packet");
+        fs_proxy_free(encoded, "encoded");
+        return;
     }
 
     // Send frame with delimiter
     uart_write_bytes(uart_num, encoded, encoded_len);
     uint8_t delim = FS_PROXY_DELIM;
     uart_write_bytes(uart_num, &delim, 1);
+
+    // Clean up
+    fs_proxy_free(packet, "packet");
+    fs_proxy_free(encoded, "encoded");
 }
 
 // Process received frame
 static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t frame_len)
 {
-    // Use static buffers to avoid stack overflow (8KB + 4KB + 4KB = 16KB)
-    static uint8_t decoded[FS_PROXY_MAX_FRAME_SIZE];
-    static char json_response[FS_PROXY_MAX_JSON_LEN];
-    static uint8_t binary_response_buffer[FS_PROXY_MAX_JSON_LEN]; // For GET command responses
+    // Allocate buffers dynamically to save memory when not processing frames
+    uint8_t *decoded = fs_proxy_malloc(FS_PROXY_MAX_FRAME_SIZE, "decoded");
+    char *json_response = fs_proxy_malloc(FS_PROXY_MAX_JSON_LEN, "json_response");
+    uint8_t *binary_response_buffer = fs_proxy_malloc(FS_PROXY_MAX_JSON_LEN, "binary_response_buffer");
+    char *json_params = fs_proxy_malloc(FS_PROXY_MAX_JSON_PARAMS_LEN, "json_params");
+
+    if (!decoded || !json_response || !binary_response_buffer || !json_params) {
+        ESP_LOGE(TAG, "Failed to allocate memory for frame processing");
+        goto cleanup;
+    }
 
     ESP_LOGI(TAG, "Processing frame: %zu bytes", frame_len);
 
     // COBS decode
-    size_t decoded_len = cobs_decode(frame, frame_len, decoded, sizeof(decoded));
+    size_t decoded_len = cobs_decode(frame, frame_len, decoded, FS_PROXY_MAX_FRAME_SIZE);
     ESP_LOGI(TAG, "COBS decoded: %zu bytes", decoded_len);
 
     if (decoded_len < 7) { // Minimum: cmd(1) + len(2) + crc32(4)
         ESP_LOGE(TAG, "Frame too short: %zu bytes", decoded_len);
         send_response(ctx->uart_num, "{\"ok\":false,\"err\":\"Frame too short\"}", NULL, 0);
-        return;
+        goto cleanup;
     }
 
     // Verify CRC32
@@ -561,7 +647,7 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
     uint32_t calculated_crc = crc32_calc(decoded, decoded_len - 4);
     if (received_crc != calculated_crc) {
         send_response(ctx->uart_num, "{\"ok\":false,\"err\":\"CRC mismatch\"}", NULL, 0);
-        return;
+        goto cleanup;
     }
 
     // Parse packet
@@ -570,14 +656,13 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
 
     if (3 + json_len + 4 > decoded_len) {
         send_response(ctx->uart_num, "{\"ok\":false,\"err\":\"Invalid length\"}", NULL, 0);
-        return;
+        goto cleanup;
     }
 
-    // Extract JSON parameters (use static buffer to avoid stack overflow - 512B)
-    static char json_params[FS_PROXY_MAX_JSON_PARAMS_LEN];
-    if (json_len >= sizeof(json_params)) {
+    // Extract JSON parameters
+    if (json_len >= FS_PROXY_MAX_JSON_PARAMS_LEN) {
         send_response(ctx->uart_num, "{\"ok\":false,\"err\":\"JSON params too long\"}", NULL, 0);
-        return;
+        goto cleanup;
     }
     memcpy(json_params, decoded + 3, json_len);
     json_params[json_len] = '\0';
@@ -600,47 +685,54 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
         case CMD_SYNC:
             ESP_LOGI(TAG, "Processing SYNC command");
             // Synchronization command - send magic bytes
-            snprintf(json_response, sizeof(json_response),
+            snprintf(json_response, FS_PROXY_MAX_JSON_LEN,
                     "{\"status\":\"ok\",\"magic\":\"%s\",\"version\":\"1.0\"}", SYNC_MAGIC);
             send_response(ctx->uart_num, json_response, NULL, 0);
             break;
 
         case CMD_CD:
             ESP_LOGI(TAG, "Processing CD command");
-            cmd_cd(ctx, json_params, json_response, sizeof(json_response));
+            cmd_cd(ctx, json_params, json_response, FS_PROXY_MAX_JSON_LEN);
             send_response(ctx->uart_num, json_response, NULL, 0);
             break;
 
         case CMD_LS:
             ESP_LOGI(TAG, "Processing LS command");
-            cmd_ls(ctx, json_params, json_response, sizeof(json_response));
+            cmd_ls(ctx, json_params, json_response, FS_PROXY_MAX_JSON_LEN);
             send_response(ctx->uart_num, json_response, NULL, 0);
             break;
 
         case CMD_RM:
-            cmd_rm(ctx, json_params, json_response, sizeof(json_response));
+            cmd_rm(ctx, json_params, json_response, FS_PROXY_MAX_JSON_LEN);
             send_response(ctx->uart_num, json_response, NULL, 0);
             break;
 
         case CMD_GET:
-            cmd_get(ctx, json_params, json_response, sizeof(json_response),
-                   binary_response_buffer, &response_binary_size, sizeof(binary_response_buffer));
+            cmd_get(ctx, json_params, json_response, FS_PROXY_MAX_JSON_LEN,
+                   binary_response_buffer, &response_binary_size, FS_PROXY_MAX_JSON_LEN);
             send_response(ctx->uart_num, json_response, binary_response_buffer, response_binary_size);
             break;
 
         case CMD_PUT:
             cmd_put(ctx, json_params, binary_data, binary_size,
-                   json_response, sizeof(json_response));
+                   json_response, FS_PROXY_MAX_JSON_LEN);
             send_response(ctx->uart_num, json_response, NULL, 0);
             break;
 
         default:
-            snprintf(json_response, sizeof(json_response), "{\"error\":\"Unknown command\"}");
+            snprintf(json_response, FS_PROXY_MAX_JSON_LEN, "{\"error\":\"Unknown command\"}");
             send_response(ctx->uart_num, json_response, NULL, 0);
             break;
     }
 
     xSemaphoreGive(ctx->mutex);
+
+cleanup:
+    // Clean up allocated memory
+    fs_proxy_free(decoded, "decoded");
+    fs_proxy_free(json_response, "json_response");
+    fs_proxy_free(binary_response_buffer, "binary_response_buffer");
+    fs_proxy_free(json_params, "json_params");
 }
 
 // Main task function
@@ -650,6 +742,14 @@ static void fs_proxy_task(void *arg)
 
     // Initialize current directory
     strncpy(ctx->current_dir, "/", sizeof(ctx->current_dir));
+
+    // Allocate hex buffer for debug logging (used in main loop)
+    char *hex_buf = fs_proxy_malloc(128, "fs_proxy_task:hex_buf");
+    if (!hex_buf) {
+        ESP_LOGE(TAG, "Failed to allocate hex_buf, task cannot continue");
+        vTaskDelete(NULL);
+        return;
+    }
 
     ESP_LOGI(TAG, "Entering main loop (priority=%d)", FS_PROXY_TASK_PRIORITY);
 
@@ -704,11 +804,10 @@ static void fs_proxy_task(void *arg)
             if (ctx->rx_len > 0) {
                 ESP_LOGI(TAG, "Frame received (%zu bytes)", ctx->rx_len);
 
-                // Hex dump first 32 bytes (use static buffer to avoid stack overflow - 128 bytes)
-                static char hex_buf[128];
+                // Hex dump first 32 bytes for debugging
                 int hex_len = 0;
                 for (size_t i = 0; i < ctx->rx_len && i < 32; i++) {
-                    hex_len += snprintf(hex_buf + hex_len, sizeof(hex_buf) - hex_len, "%02x ", ctx->rx_buffer[i]);
+                    hex_len += snprintf(hex_buf + hex_len, 128 - hex_len, "%02x ", ctx->rx_buffer[i]);
                 }
                 ESP_LOGI(TAG, "Frame data: %s%s", hex_buf, ctx->rx_len > 32 ? "..." : "");
 
