@@ -184,7 +184,7 @@ class SerialClient
   def h_ls(path="."); Dir.children(path).sort.each { |e| puts e } end
 
   # transfer up: PC->ESP32, down: ESP32->PC
-  def transfer(direction, local:, remote:, chunk: 4096)
+  def transfer(direction, local:, remote:, chunk: 1024)
     case direction
     when "up"   then put(local, remote, chunk: chunk)
     when "down" then get(remote, local, chunk: chunk)
@@ -193,7 +193,7 @@ class SerialClient
   end
 
   # --- Low-level (GET/PUT) ---
-  def get(remote_path, local_path, chunk: 4096)
+  def get(remote_path, local_path, chunk: 1024)
     File.open(local_path, "wb") do |f|
       off = 0
       loop do
@@ -209,7 +209,7 @@ class SerialClient
     true
   end
 
-  def put(local_path, remote_path, chunk: 4096)
+  def put(local_path, remote_path, chunk: 1024)
     off = 0
     File.open(local_path, "rb") do |f|
       loop do

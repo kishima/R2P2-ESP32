@@ -36,9 +36,10 @@ static const char *TAG = "fs_proxy";
 
 // Protocol definitions
 #define FS_PROXY_DELIM 0x00
-#define FS_PROXY_MAX_FRAME_SIZE 8192
+#define FS_PROXY_MAX_FRAME_SIZE 2048  // Reduced from 8192 (1KB data + overhead)
 #define FS_PROXY_MAX_PATH_LEN 256
-#define FS_PROXY_MAX_JSON_LEN 4096
+#define FS_PROXY_MAX_JSON_LEN 1024  // Reduced from 4096 (1KB chunk size)
+#define FS_PROXY_MAX_JSON_PARAMS_LEN 512  // JSON params are typically small
 
 // Command codes (from fmrb_test_server.rb)
 #define CMD_SYNC 0x01  // Synchronization command
@@ -534,10 +535,10 @@ static void send_response(uart_port_t uart_num, const char *json_response, const
 // Process received frame
 static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t frame_len)
 {
-    // Use static buffers to avoid stack overflow (8KB + 8KB + 4KB = 20KB)
+    // Use static buffers to avoid stack overflow (8KB + 4KB + 4KB = 16KB)
     static uint8_t decoded[FS_PROXY_MAX_FRAME_SIZE];
-    static uint8_t binary_buffer[FS_PROXY_MAX_FRAME_SIZE];
     static char json_response[FS_PROXY_MAX_JSON_LEN];
+    static uint8_t binary_response_buffer[FS_PROXY_MAX_JSON_LEN]; // For GET command responses
 
     ESP_LOGI(TAG, "Processing frame: %zu bytes", frame_len);
 
@@ -572,8 +573,12 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
         return;
     }
 
-    // Extract JSON parameters (use static buffer to avoid stack overflow - 4KB)
-    static char json_params[FS_PROXY_MAX_JSON_LEN];
+    // Extract JSON parameters (use static buffer to avoid stack overflow - 512B)
+    static char json_params[FS_PROXY_MAX_JSON_PARAMS_LEN];
+    if (json_len >= sizeof(json_params)) {
+        send_response(ctx->uart_num, "{\"ok\":false,\"err\":\"JSON params too long\"}", NULL, 0);
+        return;
+    }
     memcpy(json_params, decoded + 3, json_len);
     json_params[json_len] = '\0';
 
@@ -619,8 +624,8 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
 
         case CMD_GET:
             cmd_get(ctx, json_params, json_response, sizeof(json_response),
-                   binary_buffer, &response_binary_size, sizeof(binary_buffer));
-            send_response(ctx->uart_num, json_response, binary_buffer, response_binary_size);
+                   binary_response_buffer, &response_binary_size, sizeof(binary_response_buffer));
+            send_response(ctx->uart_num, json_response, binary_response_buffer, response_binary_size);
             break;
 
         case CMD_PUT:
