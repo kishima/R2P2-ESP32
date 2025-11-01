@@ -9,6 +9,7 @@
 
 // ESP32 standard logging
 #include "esp_log.h"
+#include "esp_system.h"
 
 // FreeRTOS
 #include "freertos/FreeRTOS.h"
@@ -55,6 +56,7 @@ static const char *TAG = "fs_proxy";
 #define CMD_RM  0x13
 #define CMD_GET 0x21
 #define CMD_PUT 0x22
+#define CMD_REBOOT 0x31
 #define RESP_CODE 0x00
 
 // Magic bytes for synchronization
@@ -558,6 +560,15 @@ cleanup:
     fs_proxy_free(fatfs_path, "cmd_put:fatfs_path");
 }
 
+// Command handler: REBOOT (restart ESP32)
+// Request: {} (no parameters needed)
+// Response: {"ok": true}
+static void cmd_reboot(char *response, size_t response_size)
+{
+    ESP_LOGI(TAG, "Reboot command received - restarting in 1 second");
+    snprintf(response, response_size, "{\"ok\":true,\"msg\":\"Rebooting...\"}");
+}
+
 // Send response frame (encode and send via UART)
 static void send_response(uart_port_t uart_num, const char *json_response, const uint8_t *binary_data, size_t binary_size)
 {
@@ -724,6 +735,15 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
             cmd_put(ctx, json_params, binary_data, binary_size,
                    json_response, FS_PROXY_MAX_JSON_LEN);
             send_response(ctx->uart_num, json_response, NULL, 0);
+            break;
+
+        case CMD_REBOOT:
+            ESP_LOGI(TAG, "Processing REBOOT command");
+            cmd_reboot(json_response, FS_PROXY_MAX_JSON_LEN);
+            send_response(ctx->uart_num, json_response, NULL, 0);
+            // Wait for response to be sent, then reboot
+            vTaskDelay(pdMS_TO_TICKS(100));
+            esp_restart();
             break;
 
         default:

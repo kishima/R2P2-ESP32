@@ -185,6 +185,7 @@ class SerialClient
   def r_cd(path)  = cmd_simple(0x11, path: path)         # remote cd
   def r_ls(path=".") = cmd_simple(0x12, path: path)      # remote ls -> entries
   def r_rm(path)  = cmd_simple(0x13, path: path)         # remote rm (file/dir depends on implementation)
+  def r_reboot    = cmd_simple(0x31, {})                 # remote reboot
 
   def h_cd(path)  = Dir.chdir(path)
   def h_ls(path="."); Dir.children(path).sort.each { |e| puts e } end
@@ -437,6 +438,10 @@ class InteractiveShell
       local_path = args[0]
       remote_path = args[1] || File.basename(local_path)
       upload(local_path, remote_path)
+    when "reboot"
+      reboot
+      puts "Exit shell..."
+      exit
     else
       puts "Unknown command: #{cmd}"
       puts "Type 'help' for available commands"
@@ -454,6 +459,7 @@ class InteractiveShell
         rm <path>              Remove remote file/directory
         get <remote> [local]   Download file from ESP32
         put <local> [remote]   Upload file to ESP32
+        reboot                 Reboot ESP32
 
       Local (PC) operations:
         lcd <path>             Change local directory
@@ -515,6 +521,12 @@ class InteractiveShell
     puts "Uploading #{full_local} -> #{full_remote}"
     @cli.transfer("up", local: full_local, remote: full_remote)
     puts "Upload complete"
+  end
+
+  def reboot
+    puts "Rebooting ESP32..."
+    @cli.r_reboot
+    puts "Reboot command sent. ESP32 will restart."
   end
 
   def resolve_remote_path(path)
