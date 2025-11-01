@@ -26,9 +26,12 @@ static void check_uart_file_transfer_mode(void)
   // Read button state (active low: 0 = pressed, 1 = not pressed)
   int button_state = gpio_get_level(BUTTON_GPIO);
 
+  //debug
+  button_state = 0;
+
   if (button_state == 0)
   {
-    esp_log_level_set("*", ESP_LOG_NONE);
+    //esp_log_level_set("*", ESP_LOG_NONE);
    
     // Wait a bit for any pending log output to finish
     vTaskDelay(pdMS_TO_TICKS(100));

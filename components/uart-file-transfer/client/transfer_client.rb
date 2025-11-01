@@ -117,8 +117,8 @@ class SerialClient
 
   # Synchronization: Clear buffer and wait for magic bytes
   def sync(retries: 3, timeout: 6.0)
-    # Wait for beacon from server (FMRB or FMRB_READY)
-    magic = "FMRB"
+    # Wait for beacon from server (UFTE UFTE_READY)
+    magic = "UFTE"
 
     puts "Waiting for server beacon..." if DEBUG_MODE
 
@@ -350,13 +350,13 @@ class InteractiveShell
   end
 
   def run
-    puts "=== FMRuby Transfer Shell ==="
+    puts "=== UART File Transfer Shell ==="
     puts "Type 'help' for commands, 'exit' or 'quit' to exit"
     puts ""
 
     loop do
       begin
-        prompt = "fmrb [R:#{@remote_pwd} L:#{@local_pwd}]> "
+        prompt = "[R:#{@remote_pwd} L:#{@local_pwd}]> "
         line = Readline.readline(prompt, true)
 
         break if line.nil? # Ctrl-D

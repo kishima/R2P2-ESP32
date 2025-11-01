@@ -29,7 +29,7 @@ static const char *TAG = "fs_proxy";
 
 // Log level control - Change this to enable/disable logs
 // ESP_LOG_NONE, ESP_LOG_ERROR, ESP_LOG_WARN, ESP_LOG_INFO, ESP_LOG_DEBUG, ESP_LOG_VERBOSE
-#define FS_PROXY_LOG_LEVEL ESP_LOG_NONE
+#define FS_PROXY_LOG_LEVEL ESP_LOG_INFO
 
 // UART Configuration
 #define FS_PROXY_UART_NUM UART_NUM_0
@@ -44,9 +44,9 @@ static const char *TAG = "fs_proxy";
 
 // Protocol definitions
 #define FS_PROXY_DELIM 0x00
-#define FS_PROXY_MAX_FRAME_SIZE 2048  // Reduced from 8192 (1KB data + overhead)
+#define FS_PROXY_MAX_FRAME_SIZE 2048  // 1KB data + overhead
 #define FS_PROXY_MAX_PATH_LEN 256
-#define FS_PROXY_MAX_JSON_LEN 1024  // Reduced from 4096 (1KB chunk size)
+#define FS_PROXY_MAX_JSON_LEN 1024  // 1KB chunk size
 #define FS_PROXY_MAX_JSON_PARAMS_LEN 512  // JSON params are typically small
 
 // Command codes (from fmrb_test_server.rb)
@@ -59,8 +59,8 @@ static const char *TAG = "fs_proxy";
 #define CMD_REBOOT 0x31
 #define RESP_CODE 0x00
 
-// Magic bytes for synchronization
-#define SYNC_MAGIC "FMRB"
+// Magic bytes for synchronization (Uart File Transfer for ESP32)
+#define SYNC_MAGIC "UFTE"
 
 static TaskHandle_t task_handle = NULL;
 
@@ -120,21 +120,18 @@ static uint32_t crc32_calc(const uint8_t *data, size_t len)
 }
 
 // Memory allocation wrappers for future flexibility (e.g., memory pools)
-static void* fs_proxy_malloc(size_t size, const char *tag)
+static void* fs_proxy_malloc(size_t size)
 {
     void *ptr = malloc(size);
-    if (ptr) {
-        ESP_LOGD(TAG, "Allocated %zu bytes for %s at %p", size, tag, ptr);
-    } else {
-        ESP_LOGE(TAG, "Failed to allocate %zu bytes for %s", size, tag);
+    if (!ptr) {
+        ESP_LOGE(TAG, "Failed to allocate %zu bytes", size);
     }
     return ptr;
 }
 
-static void fs_proxy_free(void *ptr, const char *tag)
+static void fs_proxy_free(void *ptr)
 {
     if (ptr) {
-        ESP_LOGD(TAG, "Freed %s at %p", tag, ptr);
         free(ptr);
     }
 }
@@ -268,8 +265,8 @@ static bool json_get_int(const char *json, const char *key, int32_t *value)
 static void cmd_cd(fs_proxy_context_t *ctx, const char *json_params, char *response, size_t response_size)
 {
     // Allocate buffers dynamically to save memory when not in use
-    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_cd:path");
-    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_cd:fatfs_path");
+    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN);
+    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN);
 
     if (!path || !fatfs_path) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Memory allocation failed\"}");
@@ -303,16 +300,16 @@ static void cmd_cd(fs_proxy_context_t *ctx, const char *json_params, char *respo
     snprintf(response, response_size, "{\"ok\":true}");
 
 cleanup:
-    fs_proxy_free(path, "cmd_cd:path");
-    fs_proxy_free(fatfs_path, "cmd_cd:fatfs_path");
+    fs_proxy_free(path);
+    fs_proxy_free(fatfs_path);
 }
 
 // Command handler: LS (list directory)
 static void cmd_ls(fs_proxy_context_t *ctx, const char *json_params, char *response, size_t response_size)
 {
     // Allocate buffers dynamically to save memory when not in use
-    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_ls:path");
-    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_ls:fatfs_path");
+    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN);
+    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN);
 
     if (!path || !fatfs_path) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Memory allocation failed\"}");
@@ -369,16 +366,16 @@ static void cmd_ls(fs_proxy_context_t *ctx, const char *json_params, char *respo
     snprintf(response + pos, response_size - pos, "]}");
 
 cleanup:
-    fs_proxy_free(path, "cmd_ls:path");
-    fs_proxy_free(fatfs_path, "cmd_ls:fatfs_path");
+    fs_proxy_free(path);
+    fs_proxy_free(fatfs_path);
 }
 
 // Command handler: RM (remove file/directory)
 static void cmd_rm(fs_proxy_context_t *ctx, const char *json_params, char *response, size_t response_size)
 {
     // Allocate buffers dynamically to save memory when not in use
-    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_rm:path");
-    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_rm:fatfs_path");
+    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN);
+    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN);
 
     if (!path || !fatfs_path) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Memory allocation failed\"}");
@@ -406,8 +403,8 @@ static void cmd_rm(fs_proxy_context_t *ctx, const char *json_params, char *respo
     snprintf(response, response_size, "{\"ok\":true}");
 
 cleanup:
-    fs_proxy_free(path, "cmd_rm:path");
-    fs_proxy_free(fatfs_path, "cmd_rm:fatfs_path");
+    fs_proxy_free(path);
+    fs_proxy_free(fatfs_path);
 }
 
 // Command handler: GET (read file and send contents)
@@ -418,8 +415,8 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
                    uint8_t *binary_data, size_t *binary_size, size_t binary_max)
 {
     // Allocate buffers dynamically to save memory when not in use
-    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_get:path");
-    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_get:fatfs_path");
+    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN);
+    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN);
     int32_t offset = 0;
 
     if (!path || !fatfs_path) {
@@ -483,8 +480,8 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
              path, offset, bytes_read, eof ? "true" : "false");
 
 cleanup:
-    fs_proxy_free(path, "cmd_get:path");
-    fs_proxy_free(fatfs_path, "cmd_get:fatfs_path");
+    fs_proxy_free(path);
+    fs_proxy_free(fatfs_path);
 }
 
 // Command handler: PUT (write file contents)
@@ -495,8 +492,8 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
                    char *response, size_t response_size)
 {
     // Allocate buffers dynamically to save memory when not in use
-    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_put:path");
-    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN, "cmd_put:fatfs_path");
+    char *path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN);
+    char *fatfs_path = fs_proxy_malloc(FS_PROXY_MAX_PATH_LEN);
     int32_t offset = 0;
 
     if (!path || !fatfs_path) {
@@ -556,8 +553,8 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
     snprintf(response, response_size, "{\"ok\":true}");
 
 cleanup:
-    fs_proxy_free(path, "cmd_put:path");
-    fs_proxy_free(fatfs_path, "cmd_put:fatfs_path");
+    fs_proxy_free(path);
+    fs_proxy_free(fatfs_path);
 }
 
 // Command handler: REBOOT (restart ESP32)
@@ -573,13 +570,13 @@ static void cmd_reboot(char *response, size_t response_size)
 static void send_response(uart_port_t uart_num, const char *json_response, const uint8_t *binary_data, size_t binary_size)
 {
     // Allocate buffers dynamically to save memory when not in use
-    uint8_t *packet = fs_proxy_malloc(FS_PROXY_MAX_FRAME_SIZE, "packet");
-    uint8_t *encoded = fs_proxy_malloc(FS_PROXY_MAX_FRAME_SIZE, "encoded");
+    uint8_t *packet = fs_proxy_malloc(FS_PROXY_MAX_FRAME_SIZE);
+    uint8_t *encoded = fs_proxy_malloc(FS_PROXY_MAX_FRAME_SIZE);
 
     if (!packet || !encoded) {
         ESP_LOGE(TAG, "Failed to allocate memory for response");
-        fs_proxy_free(packet, "packet");
-        fs_proxy_free(encoded, "encoded");
+        fs_proxy_free(packet);
+        fs_proxy_free(encoded);
         return;
     }
 
@@ -615,8 +612,8 @@ static void send_response(uart_port_t uart_num, const char *json_response, const
     size_t encoded_len = cobs_encode(packet, pos, encoded, FS_PROXY_MAX_FRAME_SIZE);
     if (encoded_len == 0) {
         ESP_LOGE(TAG, "COBS encoding failed");
-        fs_proxy_free(packet, "packet");
-        fs_proxy_free(encoded, "encoded");
+        fs_proxy_free(packet);
+        fs_proxy_free(encoded);
         return;
     }
 
@@ -626,18 +623,18 @@ static void send_response(uart_port_t uart_num, const char *json_response, const
     uart_write_bytes(uart_num, &delim, 1);
 
     // Clean up
-    fs_proxy_free(packet, "packet");
-    fs_proxy_free(encoded, "encoded");
+    fs_proxy_free(packet);
+    fs_proxy_free(encoded);
 }
 
 // Process received frame
 static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t frame_len)
 {
     // Allocate buffers dynamically to save memory when not processing frames
-    uint8_t *decoded = fs_proxy_malloc(FS_PROXY_MAX_FRAME_SIZE, "decoded");
-    char *json_response = fs_proxy_malloc(FS_PROXY_MAX_JSON_LEN, "json_response");
-    uint8_t *binary_response_buffer = fs_proxy_malloc(FS_PROXY_MAX_JSON_LEN, "binary_response_buffer");
-    char *json_params = fs_proxy_malloc(FS_PROXY_MAX_JSON_PARAMS_LEN, "json_params");
+    uint8_t *decoded = fs_proxy_malloc(FS_PROXY_MAX_FRAME_SIZE);
+    char *json_response = fs_proxy_malloc(FS_PROXY_MAX_JSON_LEN);
+    uint8_t *binary_response_buffer = fs_proxy_malloc(FS_PROXY_MAX_JSON_LEN);
+    char *json_params = fs_proxy_malloc(FS_PROXY_MAX_JSON_PARAMS_LEN);
 
     if (!decoded || !json_response || !binary_response_buffer || !json_params) {
         ESP_LOGE(TAG, "Failed to allocate memory for frame processing");
@@ -756,10 +753,10 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
 
 cleanup:
     // Clean up allocated memory
-    fs_proxy_free(decoded, "decoded");
-    fs_proxy_free(json_response, "json_response");
-    fs_proxy_free(binary_response_buffer, "binary_response_buffer");
-    fs_proxy_free(json_params, "json_params");
+    fs_proxy_free(decoded);
+    fs_proxy_free(json_response);
+    fs_proxy_free(binary_response_buffer);
+    fs_proxy_free(json_params);
 }
 
 // Main task function
@@ -771,7 +768,7 @@ static void fs_proxy_task(void *arg)
     strncpy(ctx->current_dir, "/", sizeof(ctx->current_dir));
 
     // Allocate hex buffer for debug logging (used in main loop)
-    char *hex_buf = fs_proxy_malloc(128, "fs_proxy_task:hex_buf");
+    char *hex_buf = fs_proxy_malloc(128);
     if (!hex_buf) {
         ESP_LOGE(TAG, "Failed to allocate hex_buf, task cannot continue");
         vTaskDelete(NULL);
@@ -781,7 +778,7 @@ static void fs_proxy_task(void *arg)
     ESP_LOGI(TAG, "Entering main loop (priority=%d)", FS_PROXY_TASK_PRIORITY);
 
     // Send startup beacon with magic bytes
-    const char *startup_msg = "FMRB_READY\n";
+    const char *startup_msg = "UFTE_READY\n";
     uart_write_bytes(ctx->uart_num, startup_msg, strlen(startup_msg));
     // Note: Don't use uart_flush() as it may block indefinitely
 
@@ -924,7 +921,8 @@ esp_err_t fs_proxy_create_task(void)
     }
 
     // Set UART pins
-    err = uart_set_pin(ctx.uart_num, FS_PROXY_UART_TX_PIN, FS_PROXY_UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    err = uart_set_pin(ctx.uart_num, FS_PROXY_UART_TX_PIN, FS_PROXY_UART_RX_PIN,
+                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set UART pins: %s", esp_err_to_name(err));
         uart_driver_delete(ctx.uart_num);
