@@ -26,6 +26,10 @@ extern int FLASH_disk_initialize(void);
 
 static const char *TAG = "fs_proxy";
 
+// Log level control - Change this to enable/disable logs
+// ESP_LOG_NONE, ESP_LOG_ERROR, ESP_LOG_WARN, ESP_LOG_INFO, ESP_LOG_DEBUG, ESP_LOG_VERBOSE
+#define FS_PROXY_LOG_LEVEL ESP_LOG_NONE
+
 // UART Configuration
 #define FS_PROXY_UART_NUM UART_NUM_0
 #define FS_PROXY_UART_TX_PIN 1
@@ -859,6 +863,8 @@ static void init_fat(void)
 // Public API: Create and start fs_proxy task
 esp_err_t fs_proxy_create_task(void)
 {
+    // Set log level for fs_proxy
+    esp_log_level_set(TAG, FS_PROXY_LOG_LEVEL);
 
     init_fat();
 

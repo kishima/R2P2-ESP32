@@ -7,6 +7,12 @@ require 'serialport'
 require 'zlib'
 require 'readline'
 
+# === Log Level Control ===
+# Change this to enable/disable debug logs
+# false: No debug output (production)
+# true:  Show debug output (development)
+DEBUG_MODE = false
+
 # ===== COBS (Consistent Overhead Byte Stuffing) =====
 module COBS
   def self.encode(data)
@@ -102,9 +108,9 @@ class SerialClient
     # This prevents Linux from mangling binary data
     cmd = "stty -F #{port} #{baud} raw -echo -echoe -echok -echoctl -echoke -onlcr -opost -isig -icanon -iexten 2>/dev/null"
     system(cmd) || system("stty -f #{port} #{baud} raw -echo 2>/dev/null")
-    puts "Configured TTY raw mode for #{port}"
+    puts "Configured TTY raw mode for #{port}" if DEBUG_MODE
   rescue => e
-    puts "Warning: Could not configure TTY raw mode: #{e.message}"
+    puts "Warning: Could not configure TTY raw mode: #{e.message}" if DEBUG_MODE
   end
 
   def close; @sp.close rescue nil; end
@@ -114,7 +120,7 @@ class SerialClient
     # Wait for beacon from server (FMRB or FMRB_READY)
     magic = "FMRB"
 
-    puts "Waiting for server beacon..."
+    puts "Waiting for server beacon..." if DEBUG_MODE
 
     retries.times do |attempt|
       begin
@@ -152,7 +158,7 @@ class SerialClient
 
             # Look for magic bytes (FMRB or FMRB_READY)
             if buffer.include?(magic)
-              puts "✓ Detected server beacon"
+              puts "✓ Detected server beacon" if DEBUG_MODE
               @rx.clear
               return true
             end
@@ -164,9 +170,9 @@ class SerialClient
           end
         end
 
-        puts "Sync attempt #{attempt + 1}/#{retries} timed out, retrying..." if attempt < retries - 1
+        puts "Sync attempt #{attempt + 1}/#{retries} timed out, retrying..." if attempt < retries - 1 && DEBUG_MODE
       rescue => e
-        puts "Sync attempt #{attempt + 1} failed: #{e.message}"
+        puts "Sync attempt #{attempt + 1} failed: #{e.message}" if DEBUG_MODE
       end
 
       sleep 0.5 if attempt < retries - 1
@@ -236,11 +242,11 @@ class SerialClient
     frame = pkt + DELIM
 
     # Debug: show what we're sending
-    puts "DEBUG: Sending #{frame.bytesize} bytes: #{frame.bytes.take(20).map{|b| "0x%02x" % b}.join(' ')}#{frame.bytesize > 20 ? '...' : ''}"
+    puts "DEBUG: Sending #{frame.bytesize} bytes: #{frame.bytes.take(20).map{|b| "0x%02x" % b}.join(' ')}#{frame.bytesize > 20 ? '...' : ''}" if DEBUG_MODE
 
     # Write data
     written = @sp.write(frame)
-    puts "DEBUG: Wrote #{written} bytes to serial port"
+    puts "DEBUG: Wrote #{written} bytes to serial port" if DEBUG_MODE
 
     # CRITICAL: Ensure all data is actually transmitted
     @sp.flush if @sp.respond_to?(:flush)
@@ -250,7 +256,7 @@ class SerialClient
     tx_time_ms = ((frame.bytesize * 10.0) / 115200.0 * 1000.0 * 2.0).ceil
     sleep(tx_time_ms / 1000.0)
 
-    puts "DEBUG: Waited #{tx_time_ms}ms for transmission"
+    puts "DEBUG: Waited #{tx_time_ms}ms for transmission" if DEBUG_MODE
 
     meta, _ = read_response
     meta
@@ -261,11 +267,11 @@ class SerialClient
     frame = pkt + DELIM
 
     # Debug: show what we're sending
-    puts "DEBUG: Sending #{frame.bytesize} bytes: #{frame.bytes.take(20).map{|b| "0x%02x" % b}.join(' ')}#{frame.bytesize > 20 ? '...' : ''}"
+    puts "DEBUG: Sending #{frame.bytesize} bytes: #{frame.bytes.take(20).map{|b| "0x%02x" % b}.join(' ')}#{frame.bytesize > 20 ? '...' : ''}" if DEBUG_MODE
 
     # Write data
     written = @sp.write(frame)
-    puts "DEBUG: Wrote #{written} bytes to serial port"
+    puts "DEBUG: Wrote #{written} bytes to serial port" if DEBUG_MODE
 
     # CRITICAL: Ensure all data is actually transmitted
     @sp.flush if @sp.respond_to?(:flush)
@@ -274,7 +280,7 @@ class SerialClient
     tx_time_ms = ((frame.bytesize * 10.0) / 115200.0 * 1000.0 * 2.0).ceil
     sleep(tx_time_ms / 1000.0)
 
-    puts "DEBUG: Waited #{tx_time_ms}ms for transmission"
+    puts "DEBUG: Waited #{tx_time_ms}ms for transmission" if DEBUG_MODE
 
     read_response # => [meta, data]
   end
