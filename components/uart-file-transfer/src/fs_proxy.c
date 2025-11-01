@@ -3,9 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
-#include <sys/stat.h>
-#include <dirent.h>
-#include <unistd.h>
+
+// FatFs (using picoruby-filesystem-fat implementation)
+#include "../../../picoruby-esp32/picoruby/mrbgems/picoruby-filesystem-fat/lib/ff14b/source/ff.h"
 
 // ESP32 standard logging
 #include "esp_log.h"
@@ -31,7 +31,7 @@ static const char *TAG = "fs_proxy";
 #define FS_PROXY_UART_BUF_SIZE 2048
 
 // Task Configuration
-#define FS_PROXY_TASK_STACK_SIZE 4096
+#define FS_PROXY_TASK_STACK_SIZE 8192
 #define FS_PROXY_TASK_PRIORITY 5
 
 // Protocol definitions
@@ -171,6 +171,23 @@ static size_t cobs_decode(const uint8_t *input, size_t input_len, uint8_t *outpu
     return write_idx;
 }
 
+// Helper function: convert POSIX path to FatFs path (e.g., "/" -> "1:/")
+// Note: Drive 1 is FLASH (see diskio.c: DEV_FLASH = 1)
+static bool posix_to_fatfs_path(const char *posix_path, char *fatfs_path, size_t fatfs_path_size)
+{
+    int len;
+    if (posix_path[0] == '/') {
+        len = snprintf(fatfs_path, fatfs_path_size, "1:%s", posix_path);
+    } else {
+        len = snprintf(fatfs_path, fatfs_path_size, "1:/%s", posix_path);
+    }
+
+    if (len < 0 || (size_t)len >= fatfs_path_size) {
+        return false; // Path too long
+    }
+    return true;
+}
+
 // Simple JSON value extraction (finds value after "key":)
 static bool json_get_string(const char *json, const char *key, char *value, size_t value_size)
 {
@@ -220,20 +237,29 @@ static bool json_get_int(const char *json, const char *key, int32_t *value)
 // Command handler: CD (change directory)
 static void cmd_cd(fs_proxy_context_t *ctx, const char *json_params, char *response, size_t response_size)
 {
-    char path[FS_PROXY_MAX_PATH_LEN];
+    // Use static buffers to reduce stack usage (avoid stack overflow)
+    static char path[FS_PROXY_MAX_PATH_LEN];
+    static char fatfs_path[FS_PROXY_MAX_PATH_LEN];
 
     if (!json_get_string(json_params, "path", path, sizeof(path))) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Missing path parameter\"}");
         return;
     }
 
+    // Convert path to FatFs format (e.g., "/" -> "0:/")
+    if (!posix_to_fatfs_path(path, fatfs_path, sizeof(fatfs_path))) {
+        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
+        return;
+    }
+
     // Try to open directory to verify it exists
-    DIR *dir = opendir(path);
-    if (dir == NULL) {
+    DIR dir;
+    FRESULT res = f_opendir(&dir, fatfs_path);
+    if (res != FR_OK) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Directory not found\"}");
         return;
     }
-    closedir(dir);
+    f_closedir(&dir);
 
     // Update current directory
     strncpy(ctx->current_dir, path, sizeof(ctx->current_dir) - 1);
@@ -245,16 +271,26 @@ static void cmd_cd(fs_proxy_context_t *ctx, const char *json_params, char *respo
 // Command handler: LS (list directory)
 static void cmd_ls(fs_proxy_context_t *ctx, const char *json_params, char *response, size_t response_size)
 {
-    char path[FS_PROXY_MAX_PATH_LEN];
+    // Use static buffers to reduce stack usage (avoid stack overflow)
+    static char path[FS_PROXY_MAX_PATH_LEN];
+    static char fatfs_path[FS_PROXY_MAX_PATH_LEN];
 
     // Use specified path or current directory
     if (!json_get_string(json_params, "path", path, sizeof(path))) {
         strncpy(path, ctx->current_dir, sizeof(path));
     }
 
-    DIR *dir = opendir(path);
-    if (dir == NULL) {
+    // Convert path to FatFs format (e.g., "/" -> "0:/")
+    if (!posix_to_fatfs_path(path, fatfs_path, sizeof(fatfs_path))) {
+        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
+        return;
+    }
+
+    DIR dir;
+    FRESULT res = f_opendir(&dir, fatfs_path);
+    if (res != FR_OK) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Cannot open directory\"}");
+        ESP_LOGE(TAG, "f_opendir failed: %d, path=%s", res, fatfs_path);
         return;
     }
 
@@ -262,66 +298,54 @@ static void cmd_ls(fs_proxy_context_t *ctx, const char *json_params, char *respo
     int pos = snprintf(response, response_size, "{\"ok\":true,\"entries\":[");
     bool first = true;
 
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
+    FILINFO fno;
+    while (1) {
+        res = f_readdir(&dir, &fno);
+        if (res != FR_OK || fno.fname[0] == 0) {
+            break; // End of directory or error
+        }
+
         if (!first) {
             pos += snprintf(response + pos, response_size - pos, ",");
         }
         first = false;
 
-        // Get file stats to determine type and size
-        char fullpath[FS_PROXY_MAX_PATH_LEN];
-        int len = snprintf(fullpath, sizeof(fullpath), "%s/%s", path, entry->d_name);
-        if (len >= sizeof(fullpath)) {
-            // Path too long, skip this entry
-            continue;
-        }
-
-        struct stat st;
-        const char *type = "f";
-        unsigned long size = 0;
-        if (stat(fullpath, &st) == 0) {
-            type = S_ISDIR(st.st_mode) ? "d" : "f";
-            size = st.st_size;
-        }
+        // Determine type and size
+        const char *type = (fno.fattrib & AM_DIR) ? "d" : "f";
+        unsigned long size = fno.fsize;
 
         pos += snprintf(response + pos, response_size - pos,
                        "{\"n\":\"%s\",\"t\":\"%s\",\"s\":%lu}",
-                       entry->d_name, type, size);
+                       fno.fname, type, size);
 
         if (pos >= response_size - 100) break; // Safety margin
     }
 
-    closedir(dir);
+    f_closedir(&dir);
     snprintf(response + pos, response_size - pos, "]}");
 }
 
 // Command handler: RM (remove file/directory)
 static void cmd_rm(fs_proxy_context_t *ctx, const char *json_params, char *response, size_t response_size)
 {
-    char path[FS_PROXY_MAX_PATH_LEN];
+    // Use static buffers to reduce stack usage (avoid stack overflow)
+    static char path[FS_PROXY_MAX_PATH_LEN];
+    static char fatfs_path[FS_PROXY_MAX_PATH_LEN];
 
     if (!json_get_string(json_params, "path", path, sizeof(path))) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Missing path parameter\"}");
         return;
     }
 
-    // Try to get file info to determine if it's a file or directory
-    struct stat st;
-    if (stat(path, &st) != 0) {
-        snprintf(response, response_size, "{\"ok\":false,\"err\":\"File not found\"}");
+    // Convert path to FatFs format (e.g., "/" -> "0:/")
+    if (!posix_to_fatfs_path(path, fatfs_path, sizeof(fatfs_path))) {
+        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
         return;
     }
 
-    // Remove file or directory
-    int result;
-    if (S_ISDIR(st.st_mode)) {
-        result = rmdir(path);
-    } else {
-        result = unlink(path);
-    }
-
-    if (result != 0) {
+    // Remove file or directory (f_unlink works for both in FatFs)
+    FRESULT res = f_unlink(fatfs_path);
+    if (res != FR_OK) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Failed to remove\"}");
         return;
     }
@@ -336,7 +360,9 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
                    char *response, size_t response_size,
                    uint8_t *binary_data, size_t *binary_size, size_t binary_max)
 {
-    char path[FS_PROXY_MAX_PATH_LEN];
+    // Use static buffers to reduce stack usage (avoid stack overflow)
+    static char path[FS_PROXY_MAX_PATH_LEN];
+    static char fatfs_path[FS_PROXY_MAX_PATH_LEN];
     int32_t offset = 0;
 
     if (!json_get_string(json_params, "path", path, sizeof(path))) {
@@ -348,8 +374,16 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
     // Get offset (optional, defaults to 0)
     json_get_int(json_params, "off", &offset);
 
-    FILE *file = fopen(path, "rb");
-    if (file == NULL) {
+    // Convert path to FatFs format (e.g., "/" -> "0:/")
+    if (!posix_to_fatfs_path(path, fatfs_path, sizeof(fatfs_path))) {
+        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
+        *binary_size = 0;
+        return;
+    }
+
+    FIL file;
+    FRESULT res = f_open(&file, fatfs_path, FA_READ);
+    if (res != FR_OK) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Cannot open file\"}");
         *binary_size = 0;
         return;
@@ -357,8 +391,9 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
 
     // Seek to offset
     if (offset > 0) {
-        if (fseek(file, offset, SEEK_SET) != 0) {
-            fclose(file);
+        res = f_lseek(&file, offset);
+        if (res != FR_OK) {
+            f_close(&file);
             snprintf(response, response_size, "{\"ok\":false,\"err\":\"Seek failed\"}");
             *binary_size = 0;
             return;
@@ -366,15 +401,22 @@ static void cmd_get(fs_proxy_context_t *ctx, const char *json_params,
     }
 
     // Read chunk
-    size_t bytes_read = fread(binary_data, 1, binary_max, file);
-    fclose(file);
+    UINT bytes_read;
+    res = f_read(&file, binary_data, binary_max, &bytes_read);
+    f_close(&file);
+
+    if (res != FR_OK) {
+        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Read failed\"}");
+        *binary_size = 0;
+        return;
+    }
 
     *binary_size = bytes_read;
     bool eof = (bytes_read == 0 || bytes_read < binary_max);
     snprintf(response, response_size, "{\"ok\":true,\"eof\":%s,\"bin\":%zu}",
-             eof ? "true" : "false", bytes_read);
+             eof ? "true" : "false", (size_t)bytes_read);
 
-    ESP_LOGD(TAG, "GET - path=%s, offset=%d, bytes_read=%zu, eof=%s",
+    ESP_LOGD(TAG, "GET - path=%s, offset=%d, bytes_read=%u, eof=%s",
              path, offset, bytes_read, eof ? "true" : "false");
 }
 
@@ -385,7 +427,9 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
                    const uint8_t *binary_data, size_t binary_size,
                    char *response, size_t response_size)
 {
-    char path[FS_PROXY_MAX_PATH_LEN];
+    // Use static buffers to reduce stack usage (avoid stack overflow)
+    static char path[FS_PROXY_MAX_PATH_LEN];
+    static char fatfs_path[FS_PROXY_MAX_PATH_LEN];
     int32_t offset = 0;
 
     if (!json_get_string(json_params, "path", path, sizeof(path))) {
@@ -396,34 +440,43 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
     // Get offset (optional, defaults to 0)
     json_get_int(json_params, "off", &offset);
 
-    FILE *file;
+    // Convert path to FatFs format (e.g., "/" -> "0:/")
+    if (!posix_to_fatfs_path(path, fatfs_path, sizeof(fatfs_path))) {
+        snprintf(response, response_size, "{\"ok\":false,\"err\":\"Path too long\"}");
+        return;
+    }
+
+    FIL file;
+    FRESULT res;
 
     // If offset is 0, create/truncate the file. Otherwise, open for append/update
     if (offset == 0) {
-        file = fopen(path, "wb");
+        res = f_open(&file, fatfs_path, FA_WRITE | FA_CREATE_ALWAYS);
     } else {
-        file = fopen(path, "r+b");
+        res = f_open(&file, fatfs_path, FA_WRITE);
     }
 
-    if (file == NULL) {
+    if (res != FR_OK) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Cannot open file\"}");
         return;
     }
 
     // Seek to offset if needed
     if (offset > 0) {
-        if (fseek(file, offset, SEEK_SET) != 0) {
-            fclose(file);
+        res = f_lseek(&file, offset);
+        if (res != FR_OK) {
+            f_close(&file);
             snprintf(response, response_size, "{\"ok\":false,\"err\":\"Seek failed\"}");
             return;
         }
     }
 
     // Write chunk
-    size_t bytes_written = fwrite(binary_data, 1, binary_size, file);
-    fclose(file);
+    UINT bytes_written;
+    res = f_write(&file, binary_data, binary_size, &bytes_written);
+    f_close(&file);
 
-    if (bytes_written != binary_size) {
+    if (res != FR_OK || bytes_written != binary_size) {
         snprintf(response, response_size, "{\"ok\":false,\"err\":\"Write failed\"}");
         return;
     }
@@ -434,8 +487,9 @@ static void cmd_put(fs_proxy_context_t *ctx, const char *json_params,
 // Send response frame (encode and send via UART)
 static void send_response(uart_port_t uart_num, const char *json_response, const uint8_t *binary_data, size_t binary_size)
 {
-    uint8_t packet[FS_PROXY_MAX_FRAME_SIZE];
-    uint8_t encoded[FS_PROXY_MAX_FRAME_SIZE];
+    // Use static buffers to avoid stack overflow (8KB each)
+    static uint8_t packet[FS_PROXY_MAX_FRAME_SIZE];
+    static uint8_t encoded[FS_PROXY_MAX_FRAME_SIZE];
 
     size_t json_len = strlen(json_response);
 
@@ -480,13 +534,19 @@ static void send_response(uart_port_t uart_num, const char *json_response, const
 // Process received frame
 static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t frame_len)
 {
-    uint8_t decoded[FS_PROXY_MAX_FRAME_SIZE];
-    uint8_t binary_buffer[FS_PROXY_MAX_FRAME_SIZE];
-    char json_response[FS_PROXY_MAX_JSON_LEN];
+    // Use static buffers to avoid stack overflow (8KB + 8KB + 4KB = 20KB)
+    static uint8_t decoded[FS_PROXY_MAX_FRAME_SIZE];
+    static uint8_t binary_buffer[FS_PROXY_MAX_FRAME_SIZE];
+    static char json_response[FS_PROXY_MAX_JSON_LEN];
+
+    ESP_LOGI(TAG, "Processing frame: %zu bytes", frame_len);
 
     // COBS decode
     size_t decoded_len = cobs_decode(frame, frame_len, decoded, sizeof(decoded));
+    ESP_LOGI(TAG, "COBS decoded: %zu bytes", decoded_len);
+
     if (decoded_len < 7) { // Minimum: cmd(1) + len(2) + crc32(4)
+        ESP_LOGE(TAG, "Frame too short: %zu bytes", decoded_len);
         send_response(ctx->uart_num, "{\"ok\":false,\"err\":\"Frame too short\"}", NULL, 0);
         return;
     }
@@ -512,8 +572,8 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
         return;
     }
 
-    // Extract JSON parameters
-    char json_params[FS_PROXY_MAX_JSON_LEN];
+    // Extract JSON parameters (use static buffer to avoid stack overflow - 4KB)
+    static char json_params[FS_PROXY_MAX_JSON_LEN];
     memcpy(json_params, decoded + 3, json_len);
     json_params[json_len] = '\0';
 
@@ -521,9 +581,9 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
     const uint8_t *binary_data = decoded + 3 + json_len;
     size_t binary_size = decoded_len - 4 - 3 - json_len;
 
-    ESP_LOGD(TAG, "CMD=0x%02x, JSON len=%u, Binary size=%zu, decoded_len=%zu",
+    ESP_LOGI(TAG, "CMD=0x%02x, JSON len=%u, Binary size=%zu, decoded_len=%zu",
              cmd, json_len, binary_size, decoded_len);
-    ESP_LOGD(TAG, "JSON params: %s", json_params);
+    ESP_LOGI(TAG, "JSON params: %s", json_params);
 
     // Take mutex for command execution
     xSemaphoreTake(ctx->mutex, portMAX_DELAY);
@@ -533,19 +593,21 @@ static void process_frame(fs_proxy_context_t *ctx, const uint8_t *frame, size_t 
 
     switch (cmd) {
         case CMD_SYNC:
+            ESP_LOGI(TAG, "Processing SYNC command");
             // Synchronization command - send magic bytes
             snprintf(json_response, sizeof(json_response),
                     "{\"status\":\"ok\",\"magic\":\"%s\",\"version\":\"1.0\"}", SYNC_MAGIC);
             send_response(ctx->uart_num, json_response, NULL, 0);
-            ESP_LOGI(TAG, "SYNC command received");
             break;
 
         case CMD_CD:
+            ESP_LOGI(TAG, "Processing CD command");
             cmd_cd(ctx, json_params, json_response, sizeof(json_response));
             send_response(ctx->uart_num, json_response, NULL, 0);
             break;
 
         case CMD_LS:
+            ESP_LOGI(TAG, "Processing LS command");
             cmd_ls(ctx, json_params, json_response, sizeof(json_response));
             send_response(ctx->uart_num, json_response, NULL, 0);
             break;
@@ -600,7 +662,15 @@ static void fs_proxy_task(void *arg)
         int len = uart_read_bytes(ctx->uart_num, &byte, 1, pdMS_TO_TICKS(100));
 
         if (len == 0) {
-            // No data available
+            // No data available - log if we have partial frame data
+            if (ctx->rx_len > 0) {
+                static uint32_t last_partial_log = 0;
+                uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
+                if (now - last_partial_log > 1000) {  // Log once per second
+                    ESP_LOGW(TAG, "Partial frame timeout: %zu bytes received, waiting for more or delimiter", ctx->rx_len);
+                    last_partial_log = now;
+                }
+            }
             // TODO: Beacon disabled for debugging
             // idle_counter++;
             // if (idle_counter >= BEACON_INTERVAL) {
@@ -611,9 +681,14 @@ static void fs_proxy_task(void *arg)
             continue;
         } else if (len < 0) {
             // Error reading, delay and retry
-            ESP_LOGW(TAG, "UART read error");
+            ESP_LOGW(TAG, "UART read error: %d", len);
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
+        }
+
+        // Debug: log received byte (only first 50 bytes to avoid log spam)
+        if (ctx->rx_len < 50) {
+            ESP_LOGI(TAG, "RX byte[%zu]: 0x%02x (%c)", ctx->rx_len, byte, (byte >= 32 && byte < 127) ? byte : '.');
         }
 
         // Reset idle counter when we receive data
@@ -622,9 +697,20 @@ static void fs_proxy_task(void *arg)
         if (byte == FS_PROXY_DELIM) {
             // Frame complete
             if (ctx->rx_len > 0) {
-                ESP_LOGD(TAG, "Frame received (%zu bytes)", ctx->rx_len);
+                ESP_LOGI(TAG, "Frame received (%zu bytes)", ctx->rx_len);
+
+                // Hex dump first 32 bytes (use static buffer to avoid stack overflow - 128 bytes)
+                static char hex_buf[128];
+                int hex_len = 0;
+                for (size_t i = 0; i < ctx->rx_len && i < 32; i++) {
+                    hex_len += snprintf(hex_buf + hex_len, sizeof(hex_buf) - hex_len, "%02x ", ctx->rx_buffer[i]);
+                }
+                ESP_LOGI(TAG, "Frame data: %s%s", hex_buf, ctx->rx_len > 32 ? "..." : "");
+
                 process_frame(ctx, ctx->rx_buffer, ctx->rx_len);
                 ctx->rx_len = 0;
+            } else {
+                ESP_LOGI(TAG, "Empty frame (delimiter only)");
             }
         } else {
             // Accumulate frame data
@@ -632,7 +718,7 @@ static void fs_proxy_task(void *arg)
                 ctx->rx_buffer[ctx->rx_len++] = byte;
             } else {
                 // Buffer overflow, reset
-                ESP_LOGW(TAG, "Buffer overflow, resetting");
+                ESP_LOGW(TAG, "Buffer overflow (%zu bytes), resetting", ctx->rx_len);
                 ctx->rx_len = 0;
             }
         }
@@ -658,6 +744,10 @@ esp_err_t fs_proxy_create_task(void)
         .source_clk = UART_SCLK_DEFAULT,
     };
 
+    // First, try to delete any existing driver (in case UART0 was used by bootloader/console)
+    // This is safe to call even if no driver is installed
+    uart_driver_delete(ctx.uart_num);
+
     // Install UART driver
     esp_err_t err = uart_driver_install(ctx.uart_num, FS_PROXY_UART_BUF_SIZE, FS_PROXY_UART_BUF_SIZE, 0, NULL, 0);
     if (err != ESP_OK) {
@@ -680,6 +770,9 @@ esp_err_t fs_proxy_create_task(void)
         uart_driver_delete(ctx.uart_num);
         return err;
     }
+
+    // Clear any stale data in RX buffer (from bootloader/ROM)
+    uart_flush_input(ctx.uart_num);
 
     ESP_LOGI(TAG, "Opened UART%d (TX:GPIO%d, RX:GPIO%d, baud:%d)",
              ctx.uart_num, FS_PROXY_UART_TX_PIN, FS_PROXY_UART_RX_PIN, FS_PROXY_UART_BAUD_RATE);

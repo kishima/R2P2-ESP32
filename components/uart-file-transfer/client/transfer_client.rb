@@ -65,6 +65,9 @@ class SerialClient
     # Resolve symlink if needed
     real_port = File.symlink?(port) ? File.readlink(port) : port
 
+    # Configure TTY for raw binary mode BEFORE opening (critical!)
+    configure_tty_raw_mode(real_port, baud)
+
     # For PTY devices, use File.open instead of SerialPort
     if real_port.include?("pts") || real_port.include?("tty")
       @sp = File.open(real_port, "r+b")
@@ -92,6 +95,16 @@ class SerialClient
 
     # Perform initial synchronization
     #sync
+  end
+
+  def configure_tty_raw_mode(port, baud)
+    # Use stty to configure the port for raw binary communication
+    # This prevents Linux from mangling binary data
+    cmd = "stty -F #{port} #{baud} raw -echo -echoe -echok -echoctl -echoke -onlcr -opost -isig -icanon -iexten 2>/dev/null"
+    system(cmd) || system("stty -f #{port} #{baud} raw -echo 2>/dev/null")
+    puts "Configured TTY raw mode for #{port}"
+  rescue => e
+    puts "Warning: Could not configure TTY raw mode: #{e.message}"
   end
 
   def close; @sp.close rescue nil; end
@@ -220,14 +233,49 @@ class SerialClient
 
   def request(code, json, bin=nil)
     pkt = build_packet(code, json, bin)
-    @sp.write(pkt + DELIM)
+    frame = pkt + DELIM
+
+    # Debug: show what we're sending
+    puts "DEBUG: Sending #{frame.bytesize} bytes: #{frame.bytes.take(20).map{|b| "0x%02x" % b}.join(' ')}#{frame.bytesize > 20 ? '...' : ''}"
+
+    # Write data
+    written = @sp.write(frame)
+    puts "DEBUG: Wrote #{written} bytes to serial port"
+
+    # CRITICAL: Ensure all data is actually transmitted
+    @sp.flush if @sp.respond_to?(:flush)
+
+    # Wait for transmission to complete (critical for USB-serial adapters)
+    # Calculate transmission time: (bytes * 10 bits/byte) / baud_rate + safety margin
+    tx_time_ms = ((frame.bytesize * 10.0) / 115200.0 * 1000.0 * 2.0).ceil
+    sleep(tx_time_ms / 1000.0)
+
+    puts "DEBUG: Waited #{tx_time_ms}ms for transmission"
+
     meta, _ = read_response
     meta
   end
 
   def request_bin(code, json, bin=nil)
     pkt = build_packet(code, json, bin)
-    @sp.write(pkt + DELIM)
+    frame = pkt + DELIM
+
+    # Debug: show what we're sending
+    puts "DEBUG: Sending #{frame.bytesize} bytes: #{frame.bytes.take(20).map{|b| "0x%02x" % b}.join(' ')}#{frame.bytesize > 20 ? '...' : ''}"
+
+    # Write data
+    written = @sp.write(frame)
+    puts "DEBUG: Wrote #{written} bytes to serial port"
+
+    # CRITICAL: Ensure all data is actually transmitted
+    @sp.flush if @sp.respond_to?(:flush)
+
+    # Wait for transmission to complete (critical for USB-serial adapters)
+    tx_time_ms = ((frame.bytesize * 10.0) / 115200.0 * 1000.0 * 2.0).ceil
+    sleep(tx_time_ms / 1000.0)
+
+    puts "DEBUG: Waited #{tx_time_ms}ms for transmission"
+
     read_response # => [meta, data]
   end
 

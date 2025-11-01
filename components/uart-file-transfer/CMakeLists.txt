@@ -3,7 +3,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_REQUIRES
         esp_driver_uart
-        fatfs
-        vfs
+        picoruby-esp32
+        spi_flash
         esp_timer
 )

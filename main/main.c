@@ -6,10 +6,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-// ESP VFS FATFS
-#include "esp_vfs.h"
-#include "esp_vfs_fat.h"
-#include "wear_levelling.h"
+// FatFs (using picoruby-filesystem-fat implementation)
+#include "../components/picoruby-esp32/picoruby/mrbgems/picoruby-filesystem-fat/lib/ff14b/source/ff.h"
+
+// Flash disk driver
+extern int FLASH_disk_initialize(void);
 
 void app_main(void)
 {
@@ -23,23 +24,41 @@ void app_main(void)
     // Wait a bit for any pending log output to finish
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    // Mount FATFS using ESP-IDF VFS
-    ESP_LOGI("main", "Mounting FATFS on flash partition...");
-
-    const esp_vfs_fat_mount_config_t mount_config = {
-        .format_if_mount_failed = false,
-        .max_files = 5,
-        .allocation_unit_size = CONFIG_WL_SECTOR_SIZE
-    };
-
-    wl_handle_t wl_handle = WL_INVALID_HANDLE;
-    esp_err_t err = esp_vfs_fat_spiflash_mount_rw_wl(
-        "/", "storage", &mount_config, &wl_handle);
-
-    if (err != ESP_OK) {
-        ESP_LOGE("main", "Failed to mount FATFS: %s", esp_err_to_name(err));
+    // Initialize flash disk using picoruby-filesystem-fat implementation
+    ESP_LOGI("main", "Initializing flash disk...");
+    int ret = FLASH_disk_initialize();
+    if (ret != 0) {
+        ESP_LOGE("main", "Failed to initialize flash disk: %d", ret);
     } else {
-        ESP_LOGI("main", "FATFS mounted successfully at /");
+        ESP_LOGI("main", "Flash disk initialized successfully");
+    }
+
+    // Mount FatFs
+    ESP_LOGI("main", "Mounting FatFs...");
+    static FATFS fs;
+    FRESULT fret = f_mount(&fs, "1:", 1);  // Drive 1 (FLASH), mount immediately
+    if (fret != FR_OK) {
+        ESP_LOGE("main", "Failed to mount FatFs: %d", fret);
+    } else {
+        ESP_LOGI("main", "FatFs mounted successfully at 1:");
+
+        // List root directory contents
+        DIR dir;
+        FILINFO fno;
+        fret = f_opendir(&dir, "1:/");
+        if (fret == FR_OK) {
+            ESP_LOGI("main", "Root directory contents:");
+            while (1) {
+                fret = f_readdir(&dir, &fno);
+                if (fret != FR_OK || fno.fname[0] == 0) break;
+
+                const char *type = (fno.fattrib & AM_DIR) ? "DIR " : "FILE";
+                ESP_LOGI("main", "  %s %8lu %s", type, fno.fsize, fno.fname);
+            }
+            f_closedir(&dir);
+        } else {
+            ESP_LOGE("main", "Failed to open root directory: %d", fret);
+        }
     }
 
     fs_proxy_create_task();
