@@ -1,7 +1,6 @@
 idf_component_register(
   SRCS "main.c"
-  REQUIRES picoruby-esp32 uart-file-transfer
-  PRIV_REQUIRES spi_flash
+  REQUIRES picoruby-esp32 uart-file-transfer esp_driver_gpio
   INCLUDE_DIRS ""
 )
 
