@@ -21,6 +21,9 @@
 // UART file transfer module
 #include "uart_file_transfer.h"
 
+// Flash disk driver
+extern int FLASH_disk_initialize(void);
+
 static const char *TAG = "fs_proxy";
 
 // UART Configuration
@@ -829,9 +832,36 @@ static void fs_proxy_task(void *arg)
     }
 }
 
+
+static void init_fat(void)
+{
+    // Initialize flash disk using picoruby-filesystem-fat implementation
+    ESP_LOGI("main", "Initializing flash disk...");
+    int ret = FLASH_disk_initialize();
+    if (ret != 0) {
+        ESP_LOGE("main", "Failed to initialize flash disk: %d", ret);
+    } else {
+        ESP_LOGI("main", "Flash disk initialized successfully");
+    }
+
+    // Mount FatFs
+    ESP_LOGI("main", "Mounting FatFs...");
+    static FATFS fs;
+    FRESULT fret = f_mount(&fs, "1:", 1);  // Drive 1 (FLASH), mount immediately
+    if (fret != FR_OK) {
+        ESP_LOGE("main", "Failed to mount FatFs: %d", fret);
+    } else {
+        ESP_LOGI("main", "FatFs mounted successfully at 1:");
+    }
+
+}
+
 // Public API: Create and start fs_proxy task
 esp_err_t fs_proxy_create_task(void)
 {
+
+    init_fat();
+
     static fs_proxy_context_t ctx;
 
     memset(&ctx, 0, sizeof(ctx));
