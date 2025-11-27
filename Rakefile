@@ -50,8 +50,10 @@ end
 
 desc "Build the ESP32 project"
 task :build do
-  sh "rm -rf components/picoruby-esp32/picoruby/mrbgems/picoruby-m5unified"
-  sh "cp -r mrbgem/picoruby-m5unified components/picoruby-esp32/picoruby/mrbgems/"
+  sh "cp patch/CMakeLists.txt components/picoruby-esp32/"
+  sh "cp patch/xtensa-esp.rb components/picoruby-esp32/picoruby/build_config/"
+  # sh "rm -rf components/picoruby-esp32/picoruby/mrbgems/picoruby-m5unified"
+  # sh "cp -r mrbgem/picoruby-m5unified components/picoruby-esp32/picoruby/mrbgems/"
   sh "#{DOCKER_CMD} idf.py build"
   #sh "idf.py build"
 end
@@ -80,7 +82,7 @@ end
 
 desc "Clean build artifacts"
 task :clean do
-  sh "#{DOCKER_CMD} idf.py clean"
+  #sh "#{DOCKER_CMD} idf.py clean"
   sh "rm -rf components/picoruby-esp32/picoruby/build/*"
   # FileUtils.cd MRUBY_ROOT do
   #   %w[xtensa-esp riscv-esp].each do |mruby_config|
