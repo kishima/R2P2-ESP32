@@ -7,3 +7,6 @@
 [submodule "components/M5Unified"]
 	path = components/M5Unified
 	url = https://github.com/m5stack/M5Unified.git
+[submodule "components/esp32_uart_file_transfer"]
+	path = components/esp32_uart_file_transfer
+	url = https://github.com/kishima/esp32_uart_file_transfer.git
