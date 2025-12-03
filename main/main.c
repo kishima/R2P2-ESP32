@@ -31,7 +31,7 @@ static void check_uart_file_transfer_mode(void)
 
   if (button_state == 0)
   {
-    //esp_log_level_set("*", ESP_LOG_NONE);
+    esp_log_level_set("*", ESP_LOG_NONE);
    
     // Wait a bit for any pending log output to finish
     vTaskDelay(pdMS_TO_TICKS(100));
