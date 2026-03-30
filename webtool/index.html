@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>R2P2-ESP32 Web Flasher</title>
     <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+    <script src="https://cdn.jsdelivr.net/npm/ansi_up@5.2.1/ansi_up.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -235,6 +236,7 @@
         let reader;
         let writer;
         let isConnected = false;
+        let ansi_up;
 
         const consoleDiv = document.getElementById('console');
         const connectBtn = document.getElementById('connectBtn');
@@ -244,10 +246,21 @@
         const sendBtn = document.getElementById('sendBtn');
         const connectionStatus = document.getElementById('connectionStatus');
 
+        // Initialize ansi_up
+        if (typeof AnsiUp !== 'undefined') {
+            ansi_up = new AnsiUp();
+            ansi_up.use_classes = false;
+        }
+
         function log(message, type = 'info') {
             const timestamp = new Date().toLocaleTimeString();
             const line = `[${timestamp}] ${message}\n`;
-            consoleDiv.textContent += line;
+            if (ansi_up) {
+                const html = ansi_up.ansi_to_html(line);
+                consoleDiv.innerHTML += html;
+            } else {
+                consoleDiv.textContent += line;
+            }
             consoleDiv.scrollTop = consoleDiv.scrollHeight;
         }
 
@@ -291,7 +304,12 @@
                     if (done) {
                         break;
                     }
-                    consoleDiv.textContent += value;
+                    if (ansi_up) {
+                        const html = ansi_up.ansi_to_html(value);
+                        consoleDiv.innerHTML += html;
+                    } else {
+                        consoleDiv.textContent += value;
+                    }
                     consoleDiv.scrollTop = consoleDiv.scrollHeight;
                 }
             } catch (error) {
@@ -336,7 +354,7 @@
         connectBtn.addEventListener('click', connectSerial);
         disconnectBtn.addEventListener('click', disconnectSerial);
         clearBtn.addEventListener('click', () => {
-            consoleDiv.textContent = '';
+            consoleDiv.innerHTML = '';
         });
 
         sendBtn.addEventListener('click', () => {
