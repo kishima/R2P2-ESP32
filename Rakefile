@@ -15,6 +15,7 @@ end
 # Docker configuration
 USE_DOCKER = ENV.fetch("USE_DOCKER", "false") == "true"
 USB_SERIAL_PORT = ENV.fetch("USB_SERIAL_PORT", "/dev/ttyUSB0")
+BAUD_RATE = ENV.fetch("BAUD_RATE", "115200")
 UID = `id -u`.strip
 GID = `id -g`.strip
 PWD_ = Dir.pwd
@@ -117,21 +118,21 @@ end
 desc "Flash the built firmware to ESP32"
 task :flash do
   port_opt = USE_DOCKER ? "-p #{USB_SERIAL_PORT}" : ""
-  run_cmd "idf.py #{port_opt} flash", privileged: true
+  run_cmd "idf.py #{port_opt} -b #{BAUD_RATE} flash", privileged: true
 end
 
 desc "Erase factory partition and flash firmware binary"
 task :flash_factory do
   port_opt = USE_DOCKER ? "-p #{USB_SERIAL_PORT}" : ""
-  run_cmd "esptool.py #{port_opt} -b 460800 erase_region 0x10000 0x200000", privileged: true
-  run_cmd "esptool.py #{port_opt} -b 460800 write_flash 0x10000 build/R2P2-ESP32.bin", privileged: true
+  run_cmd "esptool.py #{port_opt} -b #{BAUD_RATE} erase_region 0x10000 0x200000", privileged: true
+  run_cmd "esptool.py #{port_opt} -b #{BAUD_RATE} write_flash 0x10000 build/R2P2-ESP32.bin", privileged: true
 end
 
 desc "Erase storage partition and flash storage binary"
 task :flash_storage do
   port_opt = USE_DOCKER ? "-p #{USB_SERIAL_PORT}" : ""
-  run_cmd "esptool.py #{port_opt} -b 460800 erase_region 0x210000 0x100000", privileged: true
-  run_cmd "esptool.py #{port_opt} -b 460800 write_flash 0x210000 build/storage.bin", privileged: true
+  run_cmd "esptool.py #{port_opt} -b #{BAUD_RATE} erase_region 0x210000 0x100000", privileged: true
+  run_cmd "esptool.py #{port_opt} -b #{BAUD_RATE} write_flash 0x210000 build/storage.bin", privileged: true
 end
 
 desc "Monitor ESP32 serial output"
