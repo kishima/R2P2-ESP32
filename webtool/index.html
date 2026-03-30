@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>R2P2-ESP32 Web Flasher</title>
+    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .info-box {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin-bottom: 25px;
+            border-radius: 4px;
+        }
+
+        .info-box h3 {
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+
+        .info-box ul {
+            margin-left: 20px;
+            color: #666;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .flash-section {
+            margin-bottom: 30px;
+        }
+
+        .flash-section h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 20px;
+        }
+
+        esp-web-install-button {
+            display: block;
+            margin: 20px 0;
+        }
+
+        .console-section {
+            margin-top: 30px;
+            border-top: 2px solid #eee;
+            padding-top: 30px;
+        }
+
+        .console-section h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 20px;
+        }
+
+        #console {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 12px;
+            padding: 15px;
+            border-radius: 4px;
+            height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            margin-bottom: 15px;
+        }
+
+        .console-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background: #5568d3;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .command-input {
+            display: flex;
+            gap: 10px;
+        }
+
+        #commandInput {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #eee;
+            text-align: center;
+            color: #666;
+            font-size: 12px;
+        }
+
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>R2P2-ESP32 Web Flasher</h1>
+        <p class="subtitle">Flash your ESP32 device directly from your browser</p>
+
+        <div class="info-box">
+            <h3>Before you start:</h3>
+            <ul>
+                <li>Connect your ESP32 device via USB</li>
+                <li>Make sure you're using Chrome, Edge, or Opera browser</li>
+                <li>This tool requires Web Serial API support</li>
+            </ul>
+        </div>
+
+        <div class="flash-section">
+            <h2>Step 1: Flash Firmware</h2>
+            <esp-web-install-button manifest="./manifest.json">
+                <button slot="activate">Connect and Flash</button>
+            </esp-web-install-button>
+        </div>
+
+        <div class="console-section">
+            <h2>
+                Step 2: Serial Console
+                <span id="connectionStatus" class="status disconnected">Disconnected</span>
+            </h2>
+
+            <div class="console-controls">
+                <button id="connectBtn">Connect to Serial</button>
+                <button id="disconnectBtn" disabled>Disconnect</button>
+                <button id="clearBtn">Clear Console</button>
+            </div>
+
+            <div id="console"></div>
+
+            <div class="command-input">
+                <input type="text" id="commandInput" placeholder="Enter command..." disabled>
+                <button id="sendBtn" disabled>Send</button>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>Powered by <a href="https://esphome.github.io/esp-web-tools/" target="_blank">ESP Web Tools</a></p>
+            <p>R2P2-ESP32 - PicoRuby on ESP32</p>
+        </div>
+    </div>
+
+    <script>
+        let port;
+        let reader;
+        let writer;
+        let isConnected = false;
+
+        const consoleDiv = document.getElementById('console');
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const commandInput = document.getElementById('commandInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const connectionStatus = document.getElementById('connectionStatus');
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const line = `[${timestamp}] ${message}\n`;
+            consoleDiv.textContent += line;
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        }
+
+        function updateConnectionStatus(connected) {
+            isConnected = connected;
+            connectionStatus.textContent = connected ? 'Connected' : 'Disconnected';
+            connectionStatus.className = 'status ' + (connected ? 'connected' : 'disconnected');
+            connectBtn.disabled = connected;
+            disconnectBtn.disabled = !connected;
+            commandInput.disabled = !connected;
+            sendBtn.disabled = !connected;
+        }
+
+        async function connectSerial() {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 });
+
+                const decoder = new TextDecoderStream();
+                port.readable.pipeTo(decoder.writable);
+                reader = decoder.readable.getReader();
+
+                const encoder = new TextEncoderStream();
+                encoder.readable.pipeTo(port.writable);
+                writer = encoder.writable.getWriter();
+
+                updateConnectionStatus(true);
+                log('Serial connection established');
+
+                // Read loop
+                readLoop();
+            } catch (error) {
+                log(`Error connecting: ${error.message}`, 'error');
+            }
+        }
+
+        async function readLoop() {
+            try {
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) {
+                        break;
+                    }
+                    consoleDiv.textContent += value;
+                    consoleDiv.scrollTop = consoleDiv.scrollHeight;
+                }
+            } catch (error) {
+                log(`Read error: ${error.message}`, 'error');
+            }
+        }
+
+        async function disconnectSerial() {
+            try {
+                if (reader) {
+                    await reader.cancel();
+                    reader = null;
+                }
+                if (writer) {
+                    await writer.close();
+                    writer = null;
+                }
+                if (port) {
+                    await port.close();
+                    port = null;
+                }
+                updateConnectionStatus(false);
+                log('Serial connection closed');
+            } catch (error) {
+                log(`Error disconnecting: ${error.message}`, 'error');
+            }
+        }
+
+        async function sendCommand(command) {
+            if (!writer) {
+                log('Not connected', 'error');
+                return;
+            }
+            try {
+                await writer.write(command + '\n');
+                log(`> ${command}`, 'command');
+            } catch (error) {
+                log(`Send error: ${error.message}`, 'error');
+            }
+        }
+
+        connectBtn.addEventListener('click', connectSerial);
+        disconnectBtn.addEventListener('click', disconnectSerial);
+        clearBtn.addEventListener('click', () => {
+            consoleDiv.textContent = '';
+        });
+
+        sendBtn.addEventListener('click', () => {
+            const command = commandInput.value.trim();
+            if (command) {
+                sendCommand(command);
+                commandInput.value = '';
+            }
+        });
+
+        commandInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendBtn.click();
+            }
+        });
+
+        // Check Web Serial API support
+        if (!('serial' in navigator)) {
+            log('Web Serial API not supported. Please use Chrome, Edge, or Opera.', 'error');
+            connectBtn.disabled = true;
+        }
+
+        log('Web Flasher ready. Connect your ESP32 device.');
+    </script>
+</body>
+</html>
