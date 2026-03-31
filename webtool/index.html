@@ -237,6 +237,8 @@
         let port;
         let reader;
         let writer;
+        let readableStreamClosed;
+        let writableStreamClosed;
         let isConnected = false;
         let ansi_up;
 
@@ -282,11 +284,11 @@
                 await port.open({ baudRate: 115200 });
 
                 const decoder = new TextDecoderStream();
-                port.readable.pipeTo(decoder.writable);
+                readableStreamClosed = port.readable.pipeTo(decoder.writable);
                 reader = decoder.readable.getReader();
 
                 const encoder = new TextEncoderStream();
-                encoder.readable.pipeTo(port.writable);
+                writableStreamClosed = encoder.readable.pipeTo(port.writable);
                 writer = encoder.writable.getWriter();
 
                 updateConnectionStatus(true);
@@ -294,15 +296,23 @@
 
                 // Read loop
                 readLoop();
+
+                // Reset ESP32 via RTS (like idf.py monitor)
+                await port.setSignals({ dataTerminalReady: false, requestToSend: true });
+                await new Promise(resolve => setTimeout(resolve, 200));
+                await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+                await new Promise(resolve => setTimeout(resolve, 200));
             } catch (error) {
                 log(`Error connecting: ${error.message}`, 'error');
             }
         }
 
         async function readLoop() {
+            console.log('readLoop started');
             try {
                 while (true) {
                     const { value, done } = await reader.read();
+                    console.log('readLoop: done=', done, 'value=', JSON.stringify(value));
                     if (done) {
                         break;
                     }
@@ -315,28 +325,65 @@
                     consoleDiv.scrollTop = consoleDiv.scrollHeight;
                 }
             } catch (error) {
+                console.error('readLoop error:', error);
                 log(`Read error: ${error.message}`, 'error');
             }
+            console.log('readLoop ended');
         }
 
         async function disconnectSerial() {
             try {
+                // Cancel reader first - this will close the readable stream
                 if (reader) {
                     await reader.cancel();
                     reader = null;
                 }
+
+                // Close writer - it might already be closed by reader.cancel()
                 if (writer) {
-                    await writer.close();
+                    try {
+                        await writer.close();
+                    } catch (e) {
+                        // Writer might already be closed, ignore error
+                        console.log('Writer close error (may be already closed):', e.message);
+                    }
                     writer = null;
                 }
+
+                // Wait for streams to close
+                if (readableStreamClosed || writableStreamClosed) {
+                    try {
+                        await Promise.all([
+                            readableStreamClosed?.catch(() => {}),
+                            writableStreamClosed?.catch(() => {})
+                        ].filter(Boolean));
+                    } catch (e) {
+                        // Streams might already be closed
+                        console.log('Stream close error:', e.message);
+                    }
+                }
+
+                // Close port
                 if (port) {
                     await port.close();
                     port = null;
                 }
+
+                // Reset variables
+                readableStreamClosed = null;
+                writableStreamClosed = null;
+
                 updateConnectionStatus(false);
                 log('Serial connection closed');
             } catch (error) {
                 log(`Error disconnecting: ${error.message}`, 'error');
+                // Force reset even on error
+                reader = null;
+                writer = null;
+                port = null;
+                readableStreamClosed = null;
+                writableStreamClosed = null;
+                updateConnectionStatus(false);
             }
         }
 
