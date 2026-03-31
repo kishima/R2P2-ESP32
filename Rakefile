@@ -121,6 +121,13 @@ task :flash do
   run_cmd "idf.py #{port_opt} -b #{BAUD_RATE} flash", privileged: true
 end
 
+desc "Erase factory and storage partitions"
+task :erase do
+  port_opt = USE_DOCKER ? "-p #{USB_SERIAL_PORT}" : ""
+  run_cmd "esptool.py #{port_opt} -b #{BAUD_RATE} erase_region 0x10000 0x200000", privileged: true
+  run_cmd "esptool.py #{port_opt} -b #{BAUD_RATE} erase_region 0x210000 0x100000", privileged: true
+end
+
 desc "Erase factory partition and flash firmware binary"
 task :flash_factory do
   port_opt = USE_DOCKER ? "-p #{USB_SERIAL_PORT}" : ""
