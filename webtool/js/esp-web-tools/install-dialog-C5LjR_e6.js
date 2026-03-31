@@ -570,13 +570,6 @@ import{e,_ as t,o as i,i as r,x as o,a,n as s,t as n,m as l,b as d,E as c,c as h
               ${this._client.state===za.READY?"Connect to Wi-Fi":"Change Wi-Fi"}
             </div>
           </ew-list-item>
-          <ew-list-item
-            type="button"
-            @click=${async()=>{const e=this._client;e&&(await this._closeClientWithoutEvents(e),await xe(100)),this._client=void 0,this._state="LOGS"}}
-          >
-            ${Ca}
-            <div slot="headline">Logs & Console</div>
-          </ew-list-item>
           ${this._isSameFirmware&&this._manifest.funding_url?o`
                 <ew-list-item
                   type="link"
@@ -608,13 +601,6 @@ import{e,_ as t,o as i,i as r,x as o,a,n as s,t as n,m as l,b as d,E as c,c as h
           >
             ${Sa}
             <div slot="headline">${`Install ${this._manifest.name}`}</div>
-          </ew-list-item>
-          <ew-list-item
-            type="button"
-            @click=${async()=>{this._client=void 0,this._state="LOGS"}}
-          >
-            ${Ca}
-            <div slot="headline">Logs & Console</div>
           </ew-list-item>
         </ew-list>
       </div>

@@ -9,6 +9,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "============================================"
 echo "  R2P2-ESP32 Web Flasher Server"
+echo "  install webrick if not already installed" 
 echo "============================================"
 echo ""
 
@@ -65,12 +66,10 @@ echo ""
 # Change to webtool directory
 cd "$SCRIPT_DIR" || exit 1
 
-# Check if Python 3 is available
-if command -v python3 &> /dev/null; then
-    python3 -m http.server $PORT
-elif command -v python &> /dev/null; then
-    python -m http.server $PORT
-else
-    echo "Error: Python is not installed or not in PATH"
-    exit 1
-fi
+# Start HTTP server with WEBrick (gem install webrick if not installed)
+ruby -e "
+require 'webrick'
+server = WEBrick::HTTPServer.new(Port: $PORT, DocumentRoot: '.')
+trap('INT') { server.shutdown }
+server.start
+"
